@@ -1,81 +1,65 @@
 import time
-from datetime import datetime
-from pathlib import Path
-from gpiozero import Button
+import click
+from gpiozero import OutputDevice
 from gpiozero.pins.pigpio import PiGPIOFactory
-import subprocess
 import logging
 
 # Configuration
-TRIGGER_PIN = 17
-IMAGE_DIR = Path.home() / "Desktop" / "StereoCaptures"
-RESOLUTION = (1280, 720)
-DEBOUNCE_SEC = 0.1  # 100ms debounce time
+TRIGGER_PINS = [17, 18]
+PULSE_DURATION = 0.1  # 100ms pulse
 
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler()]
 )
 
-class StereoCameraClient:
+class StereoTriggerServer:
     def __init__(self):
-        self.logger = logging.getLogger('Client')
+        self.logger = logging.getLogger("Server")
         self._setup_gpio()
-        self._setup_directory()
-        self.capture_lock = False
-
-    def _setup_directory(self):
-        IMAGE_DIR.mkdir(parents=True, exist_ok=True)
-        self.logger.info(f"Image directory: {IMAGE_DIR}")
 
     def _setup_gpio(self):
-        factory = PiGPIOFactory()  # Uses pigpio daemon but with GPIO Zero API
-        self.trigger = Button(
-            TRIGGER_PIN,
-            pull_up=False,
-            bounce_time=DEBOUNCE_SEC,
-            pin_factory=factory
-        )
-        self.trigger.when_pressed = self._capture_handler
-
-    def _capture_image(self):
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = IMAGE_DIR / f"stereo_{timestamp}.jpg"
-        
-        cmd = [
-            "libcamera-jpeg",
-            "-o", str(filename),
-            "--width", str(RESOLUTION[0]),
-            "--height", str(RESOLUTION[1]),
-            "--nopreview",
-            "--timeout", "1"
+        factory = PiGPIOFactory()
+        self.triggers = [
+            OutputDevice(pin, active_high=True, initial_value=False, pin_factory=factory)
+            for pin in TRIGGER_PINS
         ]
-        
-        try:
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            self.logger.info(f"Captured {filename.name}")
-            self.logger.debug(f"Camera output: {result.stdout}")
-        except subprocess.CalledProcessError as e:
-            self.logger.error(f"Capture failed: {e.stderr}")
+        self.logger.info(f"Trigger pins initialized: {TRIGGER_PINS}")
 
-    def _capture_handler(self):
-        if not self.capture_lock:
-            self.capture_lock = True
-            try:
-                self.logger.info("Trigger received - Starting capture")
-                self._capture_image()
-            finally:
-                self.capture_lock = False
+    def send_pulse(self):
+        """Sends a synchronized trigger pulse to both GPIO pins."""
+        try:
+            self.logger.info("Sending synchronized trigger pulse")
+            for trigger in self.triggers:
+                trigger.on()
+            time.sleep(PULSE_DURATION)
+            for trigger in self.triggers:
+                trigger.off()
+            self.logger.info("Trigger pulse complete")
+        except Exception as e:
+            self.logger.error(f"Trigger error: {str(e)}")
+
+@click.command()
+@click.option("--test", is_flag=True, help="Test mode (auto-trigger every 2s)")
+def main(test):
+    server = StereoTriggerServer()
+    logging.info("Stereo Trigger Server Ready")
+    
+    try:
+        if test:
+            logging.info("Entering test mode...")
+            while True:
+                server.send_pulse()
+                time.sleep(2)
         else:
-            self.logger.warning("Capture already in progress - Ignoring trigger")
+            click.echo("Press ENTER to trigger cameras (CTRL+C to exit)")
+            while True:
+                input()
+                server.send_pulse()
+    except KeyboardInterrupt:
+        logging.info("Server shutdown complete")
 
 if __name__ == "__main__":
-    client = StereoCameraClient()
-    logging.info("Stereo Camera Client Ready")
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logging.info("Client shutdown complete")
+    main()
