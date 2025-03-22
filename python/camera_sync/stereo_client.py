@@ -7,7 +7,7 @@ from datetime import datetime
 TRIGGER_PIN = 17  # GPIO pin to monitor
 DESKTOP_DIR = os.path.join(os.path.expanduser("~"), "Desktop")
 IMAGE_DIR = DESKTOP_DIR  # Save images to the Desktop
-RESOLUTION = (1920, 1080)      # Desired resolution (width, height)
+RESOLUTION = (1280, 720)      # Desired resolution (width, height)
 
 # Ensure the image directory exists (should always exist for Desktop)
 os.makedirs(IMAGE_DIR, exist_ok=True)
