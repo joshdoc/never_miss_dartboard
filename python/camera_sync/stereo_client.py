@@ -1,27 +1,30 @@
-import pigpio
 import os
+import pigpio
 import time
 from datetime import datetime
 
 # Configuration
-TRIGGER_PIN = 17
-IMAGE_DIR = "/home/pi/stereo_images"
-RESOLUTION = (1280, 720)
-DEBOUNCE_US = 500000  # 500ms cooldown (0.5 seconds)
-LAST_TRIGGER = 0
+TRIGGER_PIN = 17  # GPIO pin to monitor
+DESKTOP_DIR = os.path.join(os.path.expanduser("~"), "Desktop")
+IMAGE_DIR = DESKTOP_DIR  # Save images to the Desktop
+RESOLUTION = (1920, 1080)      # Desired resolution (width, height)
 
+# Ensure the image directory exists (should always exist for Desktop)
+os.makedirs(IMAGE_DIR, exist_ok=True)
+
+# Initialize pigpio
 pi = pigpio.pi()
 if not pi.connected:
-    exit("Failed to connect to pigpio daemon")
+    print("Failed to connect to pigpio daemon")
+    exit(1)
 
-# Hardware stabilization
+# Setup GPIO pin
 pi.set_mode(TRIGGER_PIN, pigpio.INPUT)
-pi.set_pull_up_down(TRIGGER_PIN, pigpio.PUD_DOWN)
-pi.set_glitch_filter(TRIGGER_PIN, 10000)  # 10ms glitch filter
-pi.set_noise_filter(TRIGGER_PIN, 5000, 20000)  # Stable for 5ms, max wait 20ms
+pi.set_pull_up_down(TRIGGER_PIN, pigpio.PUD_DOWN)  # Hardware stabilization
+pi.set_glitch_filter(TRIGGER_PIN, 100000)  # 100ms glitch filter
 
 def capture_image(timestamp):
-    """Atomic image capture function"""
+    """Atomic image capture function using libcamera-jpeg"""
     filename = os.path.join(
         IMAGE_DIR,
         f"capture_{timestamp:.6f}.jpg"
@@ -35,28 +38,23 @@ def capture_image(timestamp):
     print(f"Captured: {filename}")
 
 def trigger_callback(gpio, level, tick):
-    """Hardware-validated trigger handler"""
-    global LAST_TRIGGER
-    
-    # Validate trigger conditions
-    current_time = pi.get_current_tick()
-    if all([
-        level == 1,  # Rising edge
-        (current_time - LAST_TRIGGER) > DEBOUNCE_US,  # Debounce check
-        pi.read(TRIGGER_PIN) == 1  # Current pin state verification
-    ]):
-        LAST_TRIGGER = current_time
-        capture_time = current_time / 1e6  # Convert μs to seconds
-        capture_image(capture_time)
+    if level == 1:
+        # Use the current time (as float seconds) as a timestamp
+        ts = time.time()
+        formatted_time = datetime.fromtimestamp(ts).strftime("%H:%M:%S.%f")[:-3]
+        print(f"[{formatted_time}] HIGH pulse detected on GPIO{gpio}")
+        capture_image(ts)
 
-# Setup environment
-os.makedirs(IMAGE_DIR, exist_ok=True)
-cb = pi.callback(TRIGGER_PIN, pigpio.RISING_EDGE, trigger_callback)
+# Register callback for rising edge detection
+pi.callback(TRIGGER_PIN, pigpio.RISING_EDGE, trigger_callback)
 
 try:
-    print("Client ready - Strict trigger validation enabled")
+    print("Pulse detector running...")
+    print(f"Monitoring GPIO{TRIGGER_PIN}")
+    print("Press CTRL+C to exit")
     while True:
         time.sleep(1)
 except KeyboardInterrupt:
-    cb.cancel()
+    print("\nStopping detector...")
+finally:
     pi.stop()
