@@ -1,3 +1,4 @@
+import time
 import click
 from gpiozero import OutputDevice
 from gpiozero.pins.pigpio import PiGPIOFactory
@@ -10,13 +11,13 @@ PULSE_DURATION = 0.1  # 100ms pulse
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler()]
 )
 
 class StereoTriggerServer:
     def __init__(self):
-        self.logger = logging.getLogger('Server')
+        self.logger = logging.getLogger("Server")
         self._setup_gpio()
 
     def _setup_gpio(self):
@@ -28,21 +29,20 @@ class StereoTriggerServer:
         self.logger.info(f"Trigger pins initialized: {TRIGGER_PINS}")
 
     def send_pulse(self):
+        """Sends a synchronized trigger pulse to both GPIO pins."""
         try:
             self.logger.info("Sending synchronized trigger pulse")
             for trigger in self.triggers:
-                trigger.blink(
-                    on_time=PULSE_DURATION,
-                    off_time=0,
-                    n=1,
-                    background=False
-                )
+                trigger.on()
+            time.sleep(PULSE_DURATION)
+            for trigger in self.triggers:
+                trigger.off()
             self.logger.info("Trigger pulse complete")
         except Exception as e:
             self.logger.error(f"Trigger error: {str(e)}")
 
 @click.command()
-@click.option('--test', is_flag=True, help="Test mode (auto-trigger every 2s)")
+@click.option("--test", is_flag=True, help="Test mode (auto-trigger every 2s)")
 def main(test):
     server = StereoTriggerServer()
     logging.info("Stereo Trigger Server Ready")
@@ -63,3 +63,4 @@ def main(test):
 
 if __name__ == "__main__":
     main()
+
