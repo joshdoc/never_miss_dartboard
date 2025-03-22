@@ -1,48 +1,65 @@
-import pigpio
-import time
-import sys
+import click
+from gpiozero import OutputDevice
+from gpiozero.pins.pigpio import PiGPIOFactory
+import logging
 
 # Configuration
-TRIGGER_PINS = [17, 18]  # GPIO17 and GPIO18
-PULSE_DURATION = 0.1      # 100ms pulse width
+TRIGGER_PINS = [17, 18]
+PULSE_DURATION = 0.1  # 100ms pulse
 
-pi = pigpio.pi()
-if not pi.connected:
-    print("Failed to connect to pigpio daemon")
-    sys.exit(1)
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
 
-# Setup GPIO outputs
-for pin in TRIGGER_PINS:
-    pi.set_mode(pin, pigpio.OUTPUT)
-    pi.write(pin, 0)
+class StereoTriggerServer:
+    def __init__(self):
+        self.logger = logging.getLogger('Server')
+        self._setup_gpio()
 
-def send_trigger():
-    """Send synchronized trigger pulse to both cameras"""
-    try:
-        # Set both pins high
-        pi.write(TRIGGER_PINS[0], 1)
-        pi.write(TRIGGER_PINS[1], 1)
-        time.sleep(PULSE_DURATION)
-        
-        # Set both pins low
-        pi.write(TRIGGER_PINS[0], 0)
-        pi.write(TRIGGER_PINS[1], 0)
-        print(f"Trigger sent at {time.time():.6f}")
-    except Exception as e:
-        print(f"Error sending trigger: {str(e)}")
+    def _setup_gpio(self):
+        factory = PiGPIOFactory()
+        self.triggers = [
+            OutputDevice(pin, active_high=True, initial_value=False, pin_factory=factory)
+            for pin in TRIGGER_PINS
+        ]
+        self.logger.info(f"Trigger pins initialized: {TRIGGER_PINS}")
 
-try:
-    print("Stereo Capture Controller")
-    print("Press ENTER to capture a stereo pair")
-    print("Press CTRL+C to exit\n")
+    def send_pulse(self):
+        try:
+            self.logger.info("Sending synchronized trigger pulse")
+            for trigger in self.triggers:
+                trigger.blink(
+                    on_time=PULSE_DURATION,
+                    off_time=0,
+                    n=1,
+                    background=False
+                )
+            self.logger.info("Trigger pulse complete")
+        except Exception as e:
+            self.logger.error(f"Trigger error: {str(e)}")
+
+@click.command()
+@click.option('--test', is_flag=True, help="Test mode (auto-trigger every 2s)")
+def main(test):
+    server = StereoTriggerServer()
+    logging.info("Stereo Trigger Server Ready")
     
-    while True:
-        input()  # Wait for Enter key press
-        send_trigger()
-        
-except KeyboardInterrupt:
-    print("\nExiting...")
-finally:
-    for pin in TRIGGER_PINS:
-        pi.write(pin, 0)
-    pi.stop()
+    try:
+        if test:
+            logging.info("Entering test mode...")
+            while True:
+                server.send_pulse()
+                time.sleep(2)
+        else:
+            click.echo("Press ENTER to trigger cameras (CTRL+C to exit)")
+            while True:
+                input()
+                server.send_pulse()
+    except KeyboardInterrupt:
+        logging.info("Server shutdown complete")
+
+if __name__ == "__main__":
+    main()
