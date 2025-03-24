@@ -1,138 +1,118 @@
-#include <opencv2/opencv.hpp>
-#include <iostream>
-#include <vector>
-#include <string>
-#include <filesystem>
-#include <chrono>
-#include <sched.h>
-#include <pthread.h>
-#include <sys/mman.h>
+import cv2
+import os
+import numpy as np
+import time
 
-namespace fs = std::filesystem;
-using namespace cv;
-using namespace std;
-using namespace std::chrono;
-
-// Set real-time priority
-void set_real_time_priority() {
-    struct sched_param param;
-    param.sched_priority = 99; // Highest priority for real-time execution
-    if (sched_setscheduler(0, SCHED_FIFO, &param) != 0) {
-        cerr << "Warning: Failed to set real-time priority!" << endl;
-    }
-    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
-        cerr << "Warning: Failed to lock memory!" << endl;
-    }
-}
-
-// Process frames with step-by-step benchmarking
-vector<Point> process_frames_timed(const string& input_folder, const string& output_folder,
-                                   const Size& kernel_size = Size(15, 15), int threshold_value = 10) {
-    vector<Point> centroids;
-    centroids.reserve(1000);
-
-    if (!fs::exists(output_folder)) {
-        fs::create_directories(output_folder);
-    }
-
-    Mat kernel = getStructuringElement(MORPH_ELLIPSE, kernel_size);
-    vector<string> file_paths;
-
-    for (const auto& entry : fs::directory_iterator(input_folder)) {
-        if (entry.path().extension() == ".png") {
-            file_paths.push_back(entry.path().string());
-        }
-    }
-
-    Mat frame, gray, top_hat, binary;
+def process_frames_tophat_downsampled(input_folder, output_folder, 
+                                      kernel_size=(15, 15),  # Adjust as needed
+                                      threshold_value=30,
+                                      scale_factor=0.5):  # Downsampling factor
+    """
+    Uses a morphological top-hat filter to isolate small bright features 
+    from a darker or uniform background, applied to downsampled images.
     
-    for (const auto& file_path : file_paths) {
-        frame = imread(file_path, IMREAD_COLOR);
-        if (frame.empty()) {
-            cerr << "Warning: Could not open " << file_path << endl;
-            continue;
-        }
+    Parameters:
+        input_folder (str): Folder containing .png frames.
+        output_folder (str): Folder where results are saved.
+        kernel_size (tuple): Size of structuring element for top-hat.
+        threshold_value (int): Threshold to isolate bright top-hat regions.
+        scale_factor (float): Factor by which to downscale images.
+    """
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+    
+    frame_files = sorted(f for f in os.listdir(input_folder) if f.endswith(".png"))
+    centroids = []
+    
+    # Create a structuring element (ellipse often works well for organic shapes)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, kernel_size)
+    
+    total_time = 0
+    for frame_file in frame_files:
+        frame_path = os.path.join(input_folder, frame_file)
+        frame = cv2.imread(frame_path)
+        if frame is None:
+            continue
+        
+        start_time = time.time()
+        
+        t1 = time.time()
+        # Downsample the image
+        frame = cv2.resize(frame, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_AREA)
+        t2 = time.time()
+        
+        # Convert to grayscale
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        t3 = time.time()
+        
+        # Apply a slight Gaussian blur to reduce noise
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        t4 = time.time()
+        
+        # Morphological Top-Hat to isolate small bright regions
+        top_hat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, kernel)
+        t5 = time.time()
+        
+        # Threshold the top-hat result
+        _, binary = cv2.threshold(top_hat, threshold_value, 255, cv2.THRESH_BINARY)
+        t6 = time.time()
+        
+        # Optional morphological close to fill small holes
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+        t7 = time.time()
+        
+        # Find contours
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        t8 = time.time()
+        
+        if contours:
+            # Pick the largest contour (assuming it's the dart)
+            largest_contour = max(contours, key=cv2.contourArea)
+            
+            # Compute centroid using moments
+            M = cv2.moments(largest_contour)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                centroids.append((cx, cy))
+                
+                # Draw a red circle on the original frame at the centroid
+                cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1)
+        t9 = time.time()
+        
+        # Save the binary (top-hat + threshold) image
+        binary_path = os.path.join(output_folder, frame_file)
+        cv2.imwrite(binary_path, binary)
+        
+        # Save the marked original frame
+        marked_path = os.path.join(output_folder, "marked_" + frame_file)
+        cv2.imwrite(marked_path, frame)
+        
+        end_time = time.time()
+        frame_time = end_time - start_time
+        total_time += frame_time
+        
+        print(f"Processed {frame_file} in {frame_time:.4f} seconds")
+        print(f"  Downsampling: {(t2 - t1):.4f} sec")
+        print(f"  Grayscale conversion: {(t3 - t2):.4f} sec")
+        print(f"  Gaussian Blur: {(t4 - t3):.4f} sec")
+        print(f"  Top-Hat transform: {(t5 - t4):.4f} sec")
+        print(f"  Thresholding: {(t6 - t5):.4f} sec")
+        print(f"  Morphological closing: {(t7 - t6):.4f} sec")
+        print(f"  Contour detection: {(t8 - t7):.4f} sec")
+        print(f"  Centroid calculation & marking: {(t9 - t8):.4f} sec")
+    
+    avg_time = total_time / len(frame_files) if frame_files else 0
+    print(f"Average processing time per frame: {avg_time:.4f} seconds")
+    print("Centroids computed:", centroids)
+    return centroids
 
-        // Start timing
-        auto start_total = high_resolution_clock::now();
+# Example usage:
+if __name__ == "__main__":
+    input_folder = "frames_output"      # Folder with your .png frames
+    output_folder = "binary_frames"     # Folder to save results
+    process_frames_tophat_downsampled(input_folder, output_folder, 
+                                      kernel_size=(12, 12), 
+                                      threshold_value=8,
+                                      scale_factor=0.4)
 
-        auto start = high_resolution_clock::now();
-        cvtColor(frame, gray, COLOR_BGR2GRAY);
-        auto time_gray = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
-
-        start = high_resolution_clock::now();
-        GaussianBlur(gray, gray, Size(5, 5), 0);
-        auto time_blur = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
-
-        start = high_resolution_clock::now();
-        morphologyEx(gray, top_hat, MORPH_TOPHAT, kernel);
-        auto time_tophat = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
-
-        start = high_resolution_clock::now();
-        threshold(top_hat, binary, threshold_value, 255, THRESH_BINARY);
-        auto time_threshold = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
-
-        start = high_resolution_clock::now();
-        morphologyEx(binary, binary, MORPH_CLOSE, kernel);
-        auto time_morph_close = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
-
-        start = high_resolution_clock::now();
-        vector<vector<Point>> contours;
-        findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
-        auto time_contours = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
-
-        auto time_moments = 0, time_draw = 0;
-        if (!contours.empty()) {
-            start = high_resolution_clock::now();
-            auto max_iter = max_element(contours.begin(), contours.end(),
-                                        [](const vector<Point>& a, const vector<Point>& b) {
-                                            return contourArea(a) < contourArea(b);
-                                        });
-
-            if (max_iter != contours.end()) {
-                Moments M = moments(*max_iter);
-                time_moments = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
-
-                if (M.m00 != 0) {
-                    int cx = static_cast<int>(M.m10 / M.m00);
-                    int cy = static_cast<int>(M.m01 / M.m00);
-                    centroids.push_back(Point(cx, cy));
-
-                    start = high_resolution_clock::now();
-                    circle(frame, Point(cx, cy), 5, Scalar(0, 0, 255), -1);
-                    time_draw = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
-                }
-            }
-        }
-
-        auto total_time = duration_cast<microseconds>(high_resolution_clock::now() - start_total).count();
-
-        // Print timing results for this frame
-        cout << "Frame: " << fs::path(file_path).filename().string() << " (Total: " << total_time << " us)" << endl;
-        cout << "  Grayscale:     " << time_gray << " us" << endl;
-        cout << "  Blur:          " << time_blur << " us" << endl;
-        cout << "  Top-Hat:       " << time_tophat << " us" << endl;
-        cout << "  Threshold:     " << time_threshold << " us" << endl;
-        cout << "  Morph Close:   " << time_morph_close << " us" << endl;
-        cout << "  Contour Detect:" << time_contours << " us" << endl;
-        cout << "  Moments Calc:  " << time_moments << " us" << endl;
-        cout << "  Draw Centroid: " << time_draw << " us" << endl;
-
-        // Save processed frames
-        imwrite(output_folder + "/" + fs::path(file_path).filename().string(), binary);
-        imwrite(output_folder + "/marked_" + fs::path(file_path).filename().string(), frame);
-    }
-
-    return centroids;
-}
-
-int main() {
-    set_real_time_priority(); // Set real-time scheduling
-
-    string input_folder = "frames_output";
-    string output_folder = "binary_frames";
-
-    vector<Point> centroids = process_frames_timed(input_folder, output_folder, Size(15, 15), 10);
-
-    return 0;
-}
