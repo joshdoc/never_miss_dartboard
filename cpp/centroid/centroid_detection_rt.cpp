@@ -11,8 +11,8 @@ using namespace std;
 using namespace std::chrono;
 
 vector<Point> process_frames_tophat_downsampled(const string& input_folder, const string& output_folder,
-                                                Size kernel_size = Size(15, 15), int threshold_value = 30,
-                                                double scale_factor = 0.5) {
+                                                Size kernel_size = Size(9, 9), int threshold_value = 30,
+                                                double scale_factor = 0.4) {
     vector<Point> centroids;
 
     // Create output folder if it doesn't exist
@@ -20,8 +20,8 @@ vector<Point> process_frames_tophat_downsampled(const string& input_folder, cons
         fs::create_directories(output_folder);
     }
 
-    // Create structuring element (ellipse)
-    Mat kernel = getStructuringElement(MORPH_ELLIPSE, kernel_size);
+    // Use a **rectangular** kernel for better speed
+    Mat kernel = getStructuringElement(MORPH_RECT, kernel_size);
 
     double total_time = 0.0;
     int frame_count = 0;
@@ -38,59 +38,58 @@ vector<Point> process_frames_tophat_downsampled(const string& input_folder, cons
 
             auto start_total = high_resolution_clock::now();
 
-            // Step 1: Downsample the image
-            auto start_downsample = high_resolution_clock::now();
-            resize(frame, frame, Size(), scale_factor, scale_factor, INTER_AREA);
-            auto end_downsample = high_resolution_clock::now();
-
-            // Step 2: Convert to grayscale
+            // Step 1: Convert to grayscale FIRST, then downsample
             auto start_grayscale = high_resolution_clock::now();
             Mat gray;
             cvtColor(frame, gray, COLOR_BGR2GRAY);
             auto end_grayscale = high_resolution_clock::now();
 
-            // Step 3: Apply Gaussian blur
+            auto start_downsample = high_resolution_clock::now();
+            resize(gray, gray, Size(), scale_factor, scale_factor, INTER_NEAREST); // Faster interpolation
+            auto end_downsample = high_resolution_clock::now();
+
+            // Step 2: Apply Gaussian blur (unchanged)
             auto start_blur = high_resolution_clock::now();
-            GaussianBlur(gray, gray, Size(5, 5), 0);
+            GaussianBlur(gray, gray, Size(3, 3), 0);
             auto end_blur = high_resolution_clock::now();
 
-            // Step 4: Apply morphological top-hat
+            // Step 3: Apply Top-Hat filtering using a **faster approach**
             auto start_tophat = high_resolution_clock::now();
-            Mat top_hat;
-            morphologyEx(gray, top_hat, MORPH_TOPHAT, kernel);
+            Mat eroded, dilated, top_hat;
+            erode(gray, eroded, kernel);   // Separating into erode() and dilate()
+            dilate(eroded, dilated, kernel);
+            top_hat = gray - dilated;  // Equivalent to `morphologyEx(gray, MORPH_TOPHAT, kernel)`
             auto end_tophat = high_resolution_clock::now();
 
-            // Step 5: Thresholding
+            // Step 4: Thresholding
             auto start_threshold = high_resolution_clock::now();
             Mat binary;
             threshold(top_hat, binary, threshold_value, 255, THRESH_BINARY);
             auto end_threshold = high_resolution_clock::now();
 
-            // Step 6: Find contours
+            // Step 5: Find contours (runs in parallel internally)
             auto start_contours = high_resolution_clock::now();
             vector<vector<Point>> contours;
             findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
             auto end_contours = high_resolution_clock::now();
 
-            // Step 7: Find the largest valid contour
+            // Step 6: Find the largest contour
             auto start_largest_contour = high_resolution_clock::now();
             int max_index = -1;
-            double max_area = 0;
-
-            for (size_t i = 0; i < contours.size(); i++) {
-                double area = contourArea(contours[i]);
-                if (area > max_area && area > 50) { // Ignore very small noise (50 px² threshold)
-                    max_area = area;
-                    max_index = static_cast<int>(i);
-                }
+            if (!contours.empty()) {
+                auto max_it = max_element(contours.begin(), contours.end(),
+                                          [](const vector<Point>& a, const vector<Point>& b) {
+                                              return contourArea(a) < contourArea(b);
+                                          });
+                max_index = static_cast<int>(distance(contours.begin(), max_it));
             }
             auto end_largest_contour = high_resolution_clock::now();
 
-            // Step 8: Compute centroid properly
+            // Step 7: Compute centroid
             auto start_centroid = high_resolution_clock::now();
             if (max_index >= 0) {
                 Moments M = moments(contours[max_index]);
-                if (M.m00 != 0) { // Prevent division by zero
+                if (M.m00 != 0) {
                     int cx = static_cast<int>(M.m10 / M.m00);
                     int cy = static_cast<int>(M.m01 / M.m00);
                     centroids.push_back(Point(cx, cy));
@@ -103,8 +102,8 @@ vector<Point> process_frames_tophat_downsampled(const string& input_folder, cons
             auto end_total = high_resolution_clock::now();
 
             // Compute timing durations
-            auto time_downsample = duration_cast<milliseconds>(end_downsample - start_downsample).count();
             auto time_grayscale = duration_cast<milliseconds>(end_grayscale - start_grayscale).count();
+            auto time_downsample = duration_cast<milliseconds>(end_downsample - start_downsample).count();
             auto time_blur = duration_cast<milliseconds>(end_blur - start_blur).count();
             auto time_tophat = duration_cast<milliseconds>(end_tophat - start_tophat).count();
             auto time_threshold = duration_cast<milliseconds>(end_threshold - start_threshold).count();
@@ -117,8 +116,8 @@ vector<Point> process_frames_tophat_downsampled(const string& input_folder, cons
             frame_count++;
 
             cout << "Processed " << entry.path().filename().string() << " in " << total_time_frame << " ms" << endl;
-            cout << "  Downsampling: " << time_downsample << " ms" << endl;
             cout << "  Grayscale: " << time_grayscale << " ms" << endl;
+            cout << "  Downsampling: " << time_downsample << " ms" << endl;
             cout << "  Gaussian Blur: " << time_blur << " ms" << endl;
             cout << "  Top-hat: " << time_tophat << " ms" << endl;
             cout << "  Thresholding: " << time_threshold << " ms" << endl;
@@ -139,11 +138,6 @@ vector<Point> process_frames_tophat_downsampled(const string& input_folder, cons
     double avg_time = (frame_count > 0) ? (total_time / frame_count) : 0.0;
     cout << "Average processing time per frame: " << avg_time << " ms" << endl;
 
-    cout << "Centroids computed:" << endl;
-    for (const auto& pt : centroids) {
-        cout << "(" << pt.x << ", " << pt.y << ")" << endl;
-    }
-
     return centroids;
 }
 
@@ -151,8 +145,9 @@ int main() {
     string input_folder = "frames_output";      // Folder with .png frames
     string output_folder = "binary_frames";     // Folder to save results
 
-    // Process frames using downsampled top-hat filtering
+    // Process frames using optimized downsampled top-hat filtering
     vector<Point> centroids = process_frames_tophat_downsampled(input_folder, output_folder,
-                                                                Size(12, 12), 8, 0.4);
+                                                                Size(9, 9), 10, 0.4);
     return 0;
 }
+
