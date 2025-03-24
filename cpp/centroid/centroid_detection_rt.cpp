@@ -68,7 +68,7 @@ vector<Point> process_frames_tophat_downsampled(const string& input_folder, cons
 
             // Step 6: Morphological closing
             auto start_morph_close = high_resolution_clock::now();
-            morphologyEx(binary, binary, MORPH_CLOSE, kernel, Point(-1, -1), 1);
+            morphologyEx(binary, binary, MORPH_CLOSE, kernel);
             auto end_morph_close = high_resolution_clock::now();
 
             // Step 7: Find contours
@@ -77,30 +77,31 @@ vector<Point> process_frames_tophat_downsampled(const string& input_folder, cons
             findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
             auto end_contours = high_resolution_clock::now();
 
+            auto start_largest_contour = high_resolution_clock::now();
+            int max_index = -1;
             if (!contours.empty()) {
                 // Step 8: Find the largest contour
-                auto start_largest_contour = high_resolution_clock::now();
                 auto max_it = max_element(contours.begin(), contours.end(),
                                           [](const vector<Point>& a, const vector<Point>& b) {
                                               return contourArea(a) < contourArea(b);
                                           });
-                int max_index = static_cast<int>(distance(contours.begin(), max_it));
-                auto end_largest_contour = high_resolution_clock::now();
-
-                // Step 9: Compute centroid
-                auto start_centroid = high_resolution_clock::now();
-                if (max_index >= 0) {
-                    Moments M = moments(contours[max_index]);
-                    if (M.m00 != 0) {
-                        int cx = static_cast<int>(M.m10 / M.m00);
-                        int cy = static_cast<int>(M.m01 / M.m00);
-                        centroids.push_back(Point(cx, cy));
-                        // Draw a red circle on the frame at the centroid
-                        circle(frame, Point(cx, cy), 5, Scalar(0, 0, 255), -1);
-                    }
-                }
-                auto end_centroid = high_resolution_clock::now();
+                max_index = static_cast<int>(distance(contours.begin(), max_it));
             }
+            auto end_largest_contour = high_resolution_clock::now();
+
+            // Step 9: Compute centroid
+            auto start_centroid = high_resolution_clock::now();
+            if (max_index >= 0) {
+                Moments M = moments(contours[max_index]);
+                if (M.m00 != 0) {
+                    int cx = static_cast<int>(M.m10 / M.m00);
+                    int cy = static_cast<int>(M.m01 / M.m00);
+                    centroids.push_back(Point(cx, cy));
+                    // Draw a red circle on the frame at the centroid
+                    circle(frame, Point(cx, cy), 5, Scalar(0, 0, 255), -1);
+                }
+            }
+            auto end_centroid = high_resolution_clock::now();
 
             auto end_total = high_resolution_clock::now();
 
@@ -157,6 +158,6 @@ int main() {
 
     // Process frames using downsampled top-hat filtering
     vector<Point> centroids = process_frames_tophat_downsampled(input_folder, output_folder,
-                                                                Size(15, 15), 10, 0.5);
+                                                                Size(12, 12), 8, 0.4);
     return 0;
 }
