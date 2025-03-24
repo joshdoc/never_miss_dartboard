@@ -13,44 +13,39 @@ using namespace cv;
 using namespace std;
 using namespace std::chrono;
 
-// Function to set real-time priority
+// Set real-time priority
 void set_real_time_priority() {
     struct sched_param param;
-    param.sched_priority = 99; // Highest priority for real-time
+    param.sched_priority = 99; // Highest priority for real-time execution
     if (sched_setscheduler(0, SCHED_FIFO, &param) != 0) {
         cerr << "Warning: Failed to set real-time priority!" << endl;
     }
-    // Lock memory to prevent swapping
     if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
         cerr << "Warning: Failed to lock memory!" << endl;
     }
 }
 
-// Real-time frame processing function
+// Process frames with step-by-step benchmarking
 vector<Point> process_frames_timed(const string& input_folder, const string& output_folder,
                                    const Size& kernel_size = Size(15, 15), int threshold_value = 10) {
     vector<Point> centroids;
-    centroids.reserve(1000);  // Preallocate vector to reduce dynamic memory allocation
+    centroids.reserve(1000);
 
-    // Ensure output folder exists
     if (!fs::exists(output_folder)) {
         fs::create_directories(output_folder);
     }
 
-    // Precompute structuring element (ellipse)
     Mat kernel = getStructuringElement(MORPH_ELLIPSE, kernel_size);
-
-    // Collect all filenames before processing to minimize system calls inside loop
     vector<string> file_paths;
+
     for (const auto& entry : fs::directory_iterator(input_folder)) {
         if (entry.path().extension() == ".png") {
             file_paths.push_back(entry.path().string());
         }
     }
 
-    // Reusable Mats to avoid frequent allocations
     Mat frame, gray, top_hat, binary;
-
+    
     for (const auto& file_path : file_paths) {
         frame = imread(file_path, IMREAD_COLOR);
         if (frame.empty()) {
@@ -58,30 +53,37 @@ vector<Point> process_frames_timed(const string& input_folder, const string& out
             continue;
         }
 
-        // **Start Timing for This Frame**
+        // Start timing
+        auto start_total = high_resolution_clock::now();
+
         auto start = high_resolution_clock::now();
-
-        // Convert to grayscale
         cvtColor(frame, gray, COLOR_BGR2GRAY);
+        auto time_gray = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
-        // Apply Gaussian blur (preallocated buffer)
+        start = high_resolution_clock::now();
         GaussianBlur(gray, gray, Size(5, 5), 0);
+        auto time_blur = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
-        // Apply morphological top-hat (preallocated buffer)
+        start = high_resolution_clock::now();
         morphologyEx(gray, top_hat, MORPH_TOPHAT, kernel);
+        auto time_tophat = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
-        // Thresholding (preallocated buffer)
+        start = high_resolution_clock::now();
         threshold(top_hat, binary, threshold_value, 255, THRESH_BINARY);
+        auto time_threshold = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
-        // Morphological closing (reduces flickering effects)
-        morphologyEx(binary, binary, MORPH_CLOSE, kernel, Point(-1, -1), 1);
+        start = high_resolution_clock::now();
+        morphologyEx(binary, binary, MORPH_CLOSE, kernel);
+        auto time_morph_close = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
-        // Find contours (reuse container to avoid allocations)
+        start = high_resolution_clock::now();
         vector<vector<Point>> contours;
         findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+        auto time_contours = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
+        auto time_moments = 0, time_draw = 0;
         if (!contours.empty()) {
-            // Find the largest contour by area
+            start = high_resolution_clock::now();
             auto max_iter = max_element(contours.begin(), contours.end(),
                                         [](const vector<Point>& a, const vector<Point>& b) {
                                             return contourArea(a) < contourArea(b);
@@ -89,46 +91,47 @@ vector<Point> process_frames_timed(const string& input_folder, const string& out
 
             if (max_iter != contours.end()) {
                 Moments M = moments(*max_iter);
+                time_moments = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
+
                 if (M.m00 != 0) {
                     int cx = static_cast<int>(M.m10 / M.m00);
                     int cy = static_cast<int>(M.m01 / M.m00);
                     centroids.push_back(Point(cx, cy));
 
-                    // Draw the centroid in red
+                    start = high_resolution_clock::now();
                     circle(frame, Point(cx, cy), 5, Scalar(0, 0, 255), -1);
+                    time_draw = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
                 }
             }
         }
 
-        // **End Timing for This Frame**
-        auto end = high_resolution_clock::now();
-        auto duration = duration_cast<milliseconds>(end - start).count();
-        cout << "Frame: " << fs::path(file_path).filename().string()
-             << " | Processing time: " << duration << " ms" << endl;
+        auto total_time = duration_cast<microseconds>(high_resolution_clock::now() - start_total).count();
 
-        // Save processed frames (avoid frequent string operations)
-        string binary_path = output_folder + "/" + fs::path(file_path).filename().string();
-        string marked_path = output_folder + "/marked_" + fs::path(file_path).filename().string();
-        imwrite(binary_path, binary);
-        imwrite(marked_path, frame);
-    }
+        // Print timing results for this frame
+        cout << "Frame: " << fs::path(file_path).filename().string() << " (Total: " << total_time << " us)" << endl;
+        cout << "  Grayscale:     " << time_gray << " us" << endl;
+        cout << "  Blur:          " << time_blur << " us" << endl;
+        cout << "  Top-Hat:       " << time_tophat << " us" << endl;
+        cout << "  Threshold:     " << time_threshold << " us" << endl;
+        cout << "  Morph Close:   " << time_morph_close << " us" << endl;
+        cout << "  Contour Detect:" << time_contours << " us" << endl;
+        cout << "  Moments Calc:  " << time_moments << " us" << endl;
+        cout << "  Draw Centroid: " << time_draw << " us" << endl;
 
-    cout << "Centroids computed:" << endl;
-    for (const auto& pt : centroids) {
-        cout << "(" << pt.x << ", " << pt.y << ")" << endl;
+        // Save processed frames
+        imwrite(output_folder + "/" + fs::path(file_path).filename().string(), binary);
+        imwrite(output_folder + "/marked_" + fs::path(file_path).filename().string(), frame);
     }
 
     return centroids;
 }
 
 int main() {
-    set_real_time_priority(); // Set RT scheduling
+    set_real_time_priority(); // Set real-time scheduling
 
-    // Input and output folders
     string input_folder = "frames_output";
     string output_folder = "binary_frames";
 
-    // Run frame processing
     vector<Point> centroids = process_frames_timed(input_folder, output_folder, Size(15, 15), 10);
 
     return 0;
