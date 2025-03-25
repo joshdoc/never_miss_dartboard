@@ -2,6 +2,7 @@
 #include <iostream>
 #include <vector>
 #include <pthread.h>
+#include <unistd.h>
 
 using namespace cv;
 using namespace std;
@@ -11,17 +12,15 @@ void set_realtime_priority() {
     struct sched_param param;
     param.sched_priority = sched_get_priority_max(SCHED_FIFO);
     if (sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
-        cerr << "Warning: Failed to set real-time priority. Run with sudo?" << endl;
+        cerr << "Warning: Failed to set real-time priority. Run with sudo!" << endl;
     }
 }
 
 void process_frame(Mat& frame, double scale_factor) {
-    // Pipeline constants (adjust based on your application)
+    static Mat gray, processed;
+    static vector<vector<Point>> contours;
     const Size kernel_size(9, 9);
     const int threshold_value = 10;
-    
-    Mat gray, processed;
-    vector<vector<Point>> contours;
     
     // Processing pipeline
     cvtColor(frame, gray, COLOR_BGR2GRAY);
@@ -29,14 +28,12 @@ void process_frame(Mat& frame, double scale_factor) {
     GaussianBlur(processed, processed, Size(3, 3), 0);
     
     // Top-hat filtering
-    Mat kernel = getStructuringElement(MORPH_RECT, kernel_size);
+    static Mat kernel = getStructuringElement(MORPH_RECT, kernel_size);
     morphologyEx(processed, processed, MORPH_TOPHAT, kernel);
     
-    // Threshold and find contours
     threshold(processed, processed, threshold_value, 255, THRESH_BINARY);
     findContours(processed, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
 
-    // Find largest contour
     if (!contours.empty()) {
         auto max_contour = *max_element(contours.begin(), contours.end(),
             [](const vector<Point>& a, const vector<Point>& b) {
@@ -44,46 +41,53 @@ void process_frame(Mat& frame, double scale_factor) {
             });
 
         Moments M = moments(max_contour);
-        if (M.m00 > 0) {
-            // Calculate and scale centroid coordinates
+        if (M.m00 > 10) {  // Minimum contour area threshold
             Point centroid(
                 static_cast<int>((M.m10 / M.m00) / scale_factor),
                 static_cast<int>((M.m01 / M.m00) / scale_factor)
             );
 
-            // Draw and output
             circle(frame, centroid, 5, Scalar(0, 0, 255), -1);
-            cout << "Centroid detected at: " << centroid << endl;
-            imwrite("detected_frame.jpg", frame);
+            cout << "CENTROID: " << centroid.x << "," << centroid.y << endl;
+            imwrite("detection.jpg", frame);
         }
     }
 }
 
 int main() {
-    set_realtime_priority();  // Set highest possible priority
+    set_realtime_priority();
     
-    VideoCapture cap(0);  // Use appropriate camera index
+    // GStreamer pipeline for 720p70 capture
+    string pipeline = "libcamerasrc ! video/x-raw,width=1280,height=720,framerate=70/1 ! "
+                      "videoconvert ! appsink sync=false";
+    VideoCapture cap(pipeline, CAP_GSTREAMER);
+    
     if (!cap.isOpened()) {
-        cerr << "Error: Could not open video source" << endl;
+        cerr << "Failed to open camera!" << endl;
         return -1;
     }
 
-    // Set camera parameters for predictable performance
-    cap.set(CAP_PROP_FRAME_WIDTH, 640);
-    cap.set(CAP_PROP_FRAME_HEIGHT, 480);
-    cap.set(CAP_PROP_FPS, 30);
-
     Mat frame;
-    const double scale_factor = 0.4;  // Downsample factor
+    const double scale_factor = 0.4;
+    unsigned long frame_count = 0;
+    time_t start_time = time(nullptr);
 
     while (true) {
-        cap >> frame;
-        if (frame.empty()) break;
+        if (!cap.read(frame)) {
+            cerr << "Capture error" << endl;
+            break;
+        }
 
         process_frame(frame, scale_factor);
+        frame_count++;
 
-        // Exit on ESC key
-        if (waitKey(1) == 27) break;
+        // Calculate FPS every 2 seconds
+        time_t current_time = time(nullptr);
+        if (current_time - start_time >= 2) {
+            cout << "FPS: " << frame_count/2 << endl;
+            frame_count = 0;
+            start_time = current_time;
+        }
     }
 
     return 0;
