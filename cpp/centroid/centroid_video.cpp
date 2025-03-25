@@ -1,89 +1,103 @@
-#include <opencv2/opencv.hpp>
+#include <libcamera/libcamera.h>
+#include <chrono>
 #include <iostream>
-#include <unistd.h>
-#include <termios.h>
-#include <fcntl.h>
+#include <signal.h>
 
-// Non-blocking keyboard check
-bool keyPressed(int &key) {
-    struct termios original, modified;
-    int flags = fcntl(0, F_GETFL, 0);
-    
-    tcgetattr(0, &original);
-    modified = original;
-    modified.c_lflag &= ~(ICANON | ECHO);
-    modified.c_cc[VMIN] = 0;
-    modified.c_cc[VTIME] = 0;
-    
-    tcsetattr(0, TCSANOW, &modified);
-    fcntl(0, F_SETFL, flags | O_NONBLOCK);
-    
-    int ch = getchar();
-    if(ch != EOF) key = ch;
-    
-    tcsetattr(0, TCSANOW, &original);
-    fcntl(0, F_SETFL, flags);
-    
-    return (ch != EOF);
+using namespace libcamera;
+using namespace std::chrono;
+
+std::atomic<bool> exit_flag{false};
+
+void signal_handler(int)
+{
+    exit_flag = true;
 }
 
-int main() {
-    cv::VideoCapture cap(0, cv::CAP_V4L2); // Use V4L2 backend
-    
-    if(!cap.isOpened()) {
-        std::cerr << "Error opening camera" << std::endl;
-        return -1;
+int main()
+{
+    signal(SIGINT, signal_handler);
+
+    // Create camera manager
+    std::unique_ptr<CameraManager> cm = std::make_unique<CameraManager>();
+    cm->start();
+
+    if (cm->cameras().empty()) {
+        std::cerr << "No cameras found!" << std::endl;
+        return 1;
     }
 
-    // Set camera parameters
-    cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
-    cap.set(cv::CAP_PROP_FPS, 70);
-    
-    // Verify settings
-    std::cout << "Actual FPS: " << cap.get(cv::CAP_PROP_FPS) << std::endl;
-    std::cout << "Resolution: " 
-              << cap.get(cv::CAP_PROP_FRAME_WIDTH) << "x" 
-              << cap.get(cv::CAP_PROP_FRAME_HEIGHT) << std::endl;
+    // Acquire first available camera
+    std::shared_ptr<Camera> camera = cm->get(cm->cameras()[0]->id());
+    camera->acquire();
 
-    cv::Mat frame, gray, thresh;
-    int key = 0;
-    
-    std::cout << "Headless capture running. Press 'q' to quit..." << std::endl;
+    // Configure for 720p70
+    std::unique_ptr<CameraConfiguration> config = camera->generateConfiguration({StreamRole::VideoRecording});
+    StreamConfiguration &streamConfig = config->at(0);
+    streamConfig.size = {1280, 720};
+    streamConfig.pixelFormat = formats::RGB888;
+    streamConfig.bufferCount = 6;
 
-    while(true) {
-        double start = cv::getTickCount();
-        
-        // Capture frame
-        if(!cap.read(frame)) {
-            std::cerr << "Capture error" << std::endl;
-            break;
-        }
+    // Set frame duration for 70 FPS (14285µs per frame)
+    const int64_t frameDuration = 14285;
+    ControlList controls;
+    controls.set(controls::FrameDurationLimits, {frameDuration, frameDuration});
 
-        // Centroid calculation
-        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
-        cv::threshold(gray, thresh, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
-        
-        cv::Moments m = cv::moments(thresh, true);
-        cv::Point centroid(-1, -1);
-        if(m.m00 != 0) {
-            centroid.x = m.m10 / m.m00;
-            centroid.y = m.m01 / m.m00;
-        }
+    // Validate configuration
+    config->validate();
+    if (camera->configure(config.get()) {
+        std::cerr << "Configuration failed" << std::endl;
+        return 1;
+    }
+
+    // Allocate buffers
+    FrameBufferAllocator allocator(camera);
+    allocator.allocate(streamConfig.stream());
+
+    // Create and queue requests
+    std::vector<std::unique_ptr<Request>> requests;
+    for (auto &buffer : allocator.buffers(streamConfig.stream())) {
+        std::unique_ptr<Request> request = camera->createRequest();
+        request->addBuffer(streamConfig.stream(), buffer.get());
+        requests.push_back(std::move(request));
+    }
+
+    camera->start(&controls);
+
+    // Queue initial requests
+    for (auto &request : requests)
+        camera->queueRequest(request.get());
+
+    // Timing variables
+    auto t_start = high_resolution_clock::now();
+    int frame_count = 0;
+    constexpr int fps_window = 70; // Update FPS every second
+
+    std::cout << "Capturing 720p70 - Press CTRL-C to exit..." << std::endl;
+
+    while (!exit_flag) {
+        Request *request = camera->waitForCompletedRequest();
+        if (!request) continue;
 
         // FPS calculation
-        double elapsed = (cv::getTickCount() - start) / cv::getTickFrequency();
-        std::cout << "Frame time: " << elapsed << "s | FPS: " 
-                  << 1/elapsed << " | Centroid: (" 
-                  << centroid.x << "," << centroid.y << ")" << "\r" << std::flush;
-
-        // Check for quit
-        if(keyPressed(key) && (key == 'q' || key == 'Q')) {
-            break;
+        frame_count++;
+        if (frame_count % fps_window == 0) {
+            auto t_now = high_resolution_clock::now();
+            double fps = fps_window / duration<double>(t_now - t_start).count();
+            t_start = t_now;
+            std::cout << "\rActual FPS: " << fps << std::flush;
         }
+
+        // Requeue the request
+        request->reuse();
+        camera->queueRequest(request);
     }
 
-    cap.release();
-    std::cout << "\nCamera released. Exiting." << std::endl;
+    // Cleanup
+    camera->stop();
+    allocator.free(streamConfig.stream());
+    camera->release();
+    cm->stop();
+
+    std::cout << "\nCapture stopped" << std::endl;
     return 0;
 }
