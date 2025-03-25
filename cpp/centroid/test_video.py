@@ -2,29 +2,41 @@ import time
 import cv2
 import numpy as np
 from picamera2 import Picamera2
+import sys
+import select
 
-# Initialize camera with proper 720p70 configuration
+# Initialize camera
 picam2 = Picamera2()
 video_config = picam2.create_video_configuration(
     main={"size": (1280, 720), "format": "RGB888"},
-    controls={"FrameRate": 70}  # Correct framerate setting
+    controls={"FrameRate": 70}
 )
 picam2.configure(video_config)
 picam2.start()
 
-while True:
-    frame_start = time.time()
-    
-    # Capture frame and convert to BGR
-    image_rgb = picam2.capture_buffer("main").reshape((720, 1280, 3)).astype(np.uint8)
-    image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
-    
-    cv2.imshow("720p70 Centroid Tracking", image_bgr)
-    
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+# Set up non-blocking input
+def has_input():
+    return select.select([sys.stdin], [], [], 0)[0]
 
-    print(f"Processing: {time.time() - frame_start:.3f}s | FPS: {1/(time.time() - frame_start):.1f}")
+print("Headless capture running. Press 'q' then Enter to quit...")
 
-cv2.destroyAllWindows()
-picam2.stop()
+try:
+    while True:
+        frame_start = time.time()
+        
+        # Capture frame (no display conversion needed)
+        image_rgb = picam2.capture_buffer("main").reshape((720, 1280, 3)).astype(np.uint8)
+        
+        # Check for quit signal
+        if has_input():
+            key = sys.stdin.read(1)
+            if key == 'q':
+                break
+
+        # Optional: Keep FPS measurement
+        elapsed = time.time() - frame_start
+        print(f"Frame time: {elapsed:.3f}s | FPS: {1/elapsed:.1f}", end='\r')
+
+finally:
+    picam2.stop()
+    print("\nCamera stopped. Exiting cleanly.")
