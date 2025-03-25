@@ -1,5 +1,5 @@
-#include <SDL.h>
-#include <opencv2/opencv.hpp>
+#include <SDL2/SDL.h>
+#include <opencv4/opencv2/opencv.hpp>
 #include <iostream>
 #include <cmath>
 #include <vector>
