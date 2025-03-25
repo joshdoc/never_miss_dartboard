@@ -85,15 +85,21 @@ vector<Point> process_frames_tophat_downsampled(const string& input_folder, cons
             }
             auto end_largest_contour = high_resolution_clock::now();
 
-            // Step 7: Compute centroid
+            // Step 7: Compute centroid (with scaling adjustment)
             auto start_centroid = high_resolution_clock::now();
             if (max_index >= 0) {
                 Moments M = moments(contours[max_index]);
                 if (M.m00 != 0) {
-                    int cx = static_cast<int>(M.m10 / M.m00);
-                    int cy = static_cast<int>(M.m01 / M.m00);
+                    // Calculate centroid in downsampled coordinates
+                    int cx_downsampled = static_cast<int>(M.m10 / M.m00);
+                    int cy_downsampled = static_cast<int>(M.m01 / M.m00);
+                    
+                    // Scale back to original image coordinates
+                    int cx = static_cast<int>(cx_downsampled / scale_factor);
+                    int cy = static_cast<int>(cy_downsampled / scale_factor);
+                    
                     centroids.push_back(Point(cx, cy));
-                    // Draw a red circle on the frame at the centroid
+                    // Draw circle on original frame using scaled coordinates
                     circle(frame, Point(cx, cy), 5, Scalar(0, 0, 255), -1);
                 }
             }
