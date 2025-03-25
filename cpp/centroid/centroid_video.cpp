@@ -67,7 +67,8 @@ int main() {
     set_realtime_priority();  // Set highest priority
     
     // GStreamer pipeline for 720p70 capture (low-latency)
-    string pipeline = "libcamerasrc ! video/x-raw,width=1280,height=720,framerate=70/1 "
+    // Use the appropriate GStreamer pipeline for the Raspberry Pi Camera Module V2
+    string pipeline = "v4l2src device=/dev/video0 ! video/x-raw,width=1280,height=720,framerate=70/1 "
                       "! videoconvert ! video/x-raw,format=BGR ! appsink sync=false";
     VideoCapture cap(pipeline, CAP_GSTREAMER);
 
