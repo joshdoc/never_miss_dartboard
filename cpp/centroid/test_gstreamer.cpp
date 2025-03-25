@@ -5,37 +5,31 @@ using namespace cv;
 using namespace std;
 
 int main() {
-    // Use V4L2 backend for Raspberry Pi camera
-    VideoCapture cap(0, CAP_V4L2); 
+    // GStreamer pipeline for libcamera
+    string pipeline = "libcamerasrc ! video/x-raw,width=1280,height=720,framerate=30 ! "
+                      "videoconvert ! video/x-raw,format=BGR ! appsink";
+    
+    VideoCapture cap(pipeline, CAP_GSTREAMER);
     
     if (!cap.isOpened()) {
-        cerr << "Error: Could not open camera!" << endl;
+        cerr << "Failed to open camera!" << endl;
         return -1;
     }
 
-    // Set camera parameters
-    cap.set(CAP_PROP_FRAME_WIDTH, 1280);
-    cap.set(CAP_PROP_FRAME_HEIGHT, 720);
-    cap.set(CAP_PROP_FPS, 30); // Start with 30 FPS for testing
-
-    cout << "Displaying camera feed. Press 'q' to quit..." << endl;
-
+    cout << "Displaying feed - Press ESC to quit" << endl;
+    
     Mat frame;
-    while (true) {
+    while(true) {
         cap >> frame;
-        if (frame.empty()) {
-            cerr << "Warning: Empty frame!" << endl;
+        if(frame.empty()) {
+            cerr << "Empty frame!" << endl;
             continue;
         }
-
-        // Display frame
-        imshow("Camera Feed", frame);
-
-        // Exit on 'q' key
-        if (waitKey(1) == 'q') break;
+        
+        imshow("Pi Camera", frame);
+        if(waitKey(1) == 27) break;
     }
-
+    
     cap.release();
-    destroyAllWindows();
     return 0;
 }
