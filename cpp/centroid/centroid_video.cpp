@@ -1,121 +1,89 @@
 #include <opencv2/opencv.hpp>
 #include <iostream>
-#include <vector>
-#include <chrono>
-#include <sys/syscall.h>
-#include <linux/sched.h>
+#include <unistd.h>
+#include <termios.h>
+#include <fcntl.h>
 
-using namespace cv;
-using namespace std;
-using namespace chrono;
-
-// Real-time priority setup
-void set_realtime_priority() {
-    struct sched_param param;
-    param.sched_priority = sched_get_priority_max(SCHED_FIFO);
-    if (sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
-        cerr << "Warning: Failed to set real-time priority. Run with sudo!" << endl;
-    }
-}
-
-// Keep original pipeline exactly as you designed it
-bool process_frame(const Mat& frame, Mat& output, Point& centroid,
-                  Size kernel_size = Size(9, 9), int threshold_value = 30,
-                  double scale_factor = 0.4) {
-    static Mat gray, eroded, dilated, top_hat, binary;  // Reuse memory
-    static vector<vector<Point>> contours;  // Reuse contour storage
+// Non-blocking keyboard check
+bool keyPressed(int &key) {
+    struct termios original, modified;
+    int flags = fcntl(0, F_GETFL, 0);
     
-    // Your original processing steps (unchanged)
-    cvtColor(frame, gray, COLOR_BGR2GRAY);
-    resize(gray, gray, Size(), scale_factor, scale_factor, INTER_NEAREST);
-    GaussianBlur(gray, gray, Size(3, 3), 0);
+    tcgetattr(0, &original);
+    modified = original;
+    modified.c_lflag &= ~(ICANON | ECHO);
+    modified.c_cc[VMIN] = 0;
+    modified.c_cc[VTIME] = 0;
     
-    // Your manual top-hat implementation (preserved)
-    static Mat kernel = getStructuringElement(MORPH_RECT, kernel_size);
-    erode(gray, eroded, kernel);
-    dilate(eroded, dilated, kernel);
-    subtract(gray, dilated, top_hat);
+    tcsetattr(0, TCSANOW, &modified);
+    fcntl(0, F_SETFL, flags | O_NONBLOCK);
     
-    threshold(top_hat, binary, threshold_value, 255, THRESH_BINARY);
-    findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
-
-    int max_index = -1;
-    if (!contours.empty()) {
-        auto max_it = max_element(contours.begin(), contours.end(),
-                                [](const vector<Point>& a, const vector<Point>& b) {
-                                    return contourArea(a) < contourArea(b);
-                                });
-        max_index = static_cast<int>(distance(contours.begin(), max_it));
-    }
-
-    if (max_index >= 0) {
-        Moments M = moments(contours[max_index]);
-        if (M.m00 > 10) {  // Minimum area threshold
-            centroid.x = static_cast<int>((M.m10 / M.m00) / scale_factor);
-            centroid.y = static_cast<int>((M.m01 / M.m00) / scale_factor);
-            
-            // Avoid clone() using pre-allocated memory
-            frame.copyTo(output);
-            circle(output, centroid, 5, Scalar(0, 0, 255), -1);
-            return true;
-        }
-    }
-    return false;
+    int ch = getchar();
+    if(ch != EOF) key = ch;
+    
+    tcsetattr(0, TCSANOW, &original);
+    fcntl(0, F_SETFL, flags);
+    
+    return (ch != EOF);
 }
 
 int main() {
-    set_realtime_priority();  // Set highest priority
+    cv::VideoCapture cap(0, cv::CAP_V4L2); // Use V4L2 backend
     
-    // GStreamer pipeline for 720p70 capture (low-latency)
-    // Use the appropriate GStreamer pipeline for the Raspberry Pi Camera Module V2
-    string pipeline = "v4l2src device=/dev/video0 ! video/x-raw,width=1280,height=720,framerate=70/1 "
-                      "! videoconvert ! video/x-raw,format=BGR ! appsink sync=false";
-    VideoCapture cap(pipeline, CAP_GSTREAMER);
-
-    if (!cap.isOpened()) {
-        cerr << "Failed to initialize camera!" << endl;
+    if(!cap.isOpened()) {
+        std::cerr << "Error opening camera" << std::endl;
         return -1;
     }
 
-    Mat frame, output;
-    Point centroid;
-    int frame_count = 0;
-    auto last_report = steady_clock::now();
-
-    // Warm-up camera
-    for(int i = 0; i < 5; ++i) cap.grab();
-
-    cout << "Starting 720p70 processing..." << endl;
+    // Set camera parameters
+    cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
+    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
+    cap.set(cv::CAP_PROP_FPS, 70);
     
+    // Verify settings
+    std::cout << "Actual FPS: " << cap.get(cv::CAP_PROP_FPS) << std::endl;
+    std::cout << "Resolution: " 
+              << cap.get(cv::CAP_PROP_FRAME_WIDTH) << "x" 
+              << cap.get(cv::CAP_PROP_FRAME_HEIGHT) << std::endl;
+
+    cv::Mat frame, gray, thresh;
+    int key = 0;
+    
+    std::cout << "Headless capture running. Press 'q' to quit..." << std::endl;
+
     while(true) {
-        auto start = steady_clock::now();
+        double start = cv::getTickCount();
         
+        // Capture frame
         if(!cap.read(frame)) {
-            cerr << "Capture error" << endl;
+            std::cerr << "Capture error" << std::endl;
             break;
         }
 
-        bool detected = process_frame(frame, output, centroid);
+        // Centroid calculation
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+        cv::threshold(gray, thresh, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
         
-        // Only save when detected (JPEG instead of PNG for speed)
-        if(detected) {
-            imwrite(format("detected/frame_%05d.jpg", frame_count), output);
-            cout << "Detected: " << centroid << endl;
+        cv::Moments m = cv::moments(thresh, true);
+        cv::Point centroid(-1, -1);
+        if(m.m00 != 0) {
+            centroid.x = m.m10 / m.m00;
+            centroid.y = m.m01 / m.m00;
         }
 
-        // Performance reporting
-        if(++frame_count % 100 == 0) {
-            auto now = steady_clock::now();
-            double fps = 100000.0 / duration_cast<microseconds>(now - last_report).count();
-            cout << "FPS: " << fps << " | Latency: " 
-                 << duration_cast<microseconds>(now - start).count() << "μs" << endl;
-            last_report = now;
-        }
+        // FPS calculation
+        double elapsed = (cv::getTickCount() - start) / cv::getTickFrequency();
+        std::cout << "Frame time: " << elapsed << "s | FPS: " 
+                  << 1/elapsed << " | Centroid: (" 
+                  << centroid.x << "," << centroid.y << ")" << "\r" << std::flush;
 
-        // Exit on ESC (without GUI dependency)
-        if(cap.get(CAP_PROP_POS_MSEC) > 0 && waitKey(1) == 27) break;
+        // Check for quit
+        if(keyPressed(key) && (key == 'q' || key == 'Q')) {
+            break;
+        }
     }
 
     cap.release();
+    std::cout << "\nCamera released. Exiting." << std::endl;
     return 0;
 }
