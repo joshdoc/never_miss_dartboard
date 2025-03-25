@@ -25,11 +25,11 @@ int main() {
     StreamConfiguration &streamConfig = config->at(0);
     streamConfig.size = {1280, 720};
     streamConfig.pixelFormat = formats::YUV420;
-    streamConfig.bufferCount = 4; // Use 4 buffers for smooth streaming
+    streamConfig.bufferCount = 4;
 
-    // Set frame rate (convert FPS to duration in microseconds)
+    // Set frame rate
     constexpr double fps = 70.0;
-    constexpr int64_t frameDuration = 1000000 / fps; // microseconds per frame
+    constexpr int64_t frameDuration = 1000000 / fps;
     ControlList controls;
     controls.set(controls::FrameDurationLimits, {frameDuration, frameDuration});
 
@@ -71,52 +71,51 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    // Queue all requests
-    for (auto &request : requests) {
-        if (camera->queueRequest(request.get())) {
-            std::cerr << "Failed to queue request" << std::endl;
-            return EXIT_FAILURE;
-        }
-    }
-
     // OpenCV window setup
     cv::namedWindow("Camera Preview", cv::WINDOW_NORMAL);
     cv::resizeWindow("Camera Preview", 1280, 720);
 
-    // Main capture loop
-    while (true) {
-        std::unique_ptr<Request> request = camera->waitForCompletedRequest();
-        if (!request) {
-            std::cerr << "Request error" << std::endl;
-            break;
-        }
+    // Signal handler for completed requests
+    for (auto &request : requests) {
+        request->completed.connect([&](Request *req) {
+            // Get completed request
+            FrameBuffer *buffer = req->buffers().at(streamConfig.stream());
+            
+            // Map the buffer
+            MappedFrameBuffer mapped(buffer, MappedFrameBuffer::MapFlag::Read);
+            if (!mapped.isValid()) {
+                std::cerr << "Failed to map buffer" << std::endl;
+                return;
+            }
 
-        // Get frame buffer
-        FrameBuffer *buffer = request->buffers().at(streamConfig.stream());
-        const FrameBuffer::Plane &yPlane = buffer->planes().front();
+            // Create YUV matrix (NV12 format)
+            const FrameMetadata &metadata = buffer->metadata();
+            cv::Mat yuv(metadata.planes()[0].height + metadata.planes()[1].height,
+                      metadata.planes()[0].stride, CV_8UC1, mapped.planes()[0].data());
 
-        // Map the buffer for CPU access
-        const Span<uint8_t> mem = buffer->maps().front().get();
-        if (mem.empty()) {
-            std::cerr << "Failed to map buffer" << std::endl;
-            continue;
-        }
+            // Convert to BGR
+            cv::Mat bgr;
+            cv::cvtColor(yuv, bgr, cv::COLOR_YUV2BGR_NV12);
 
-        // Create YUV matrix (NV12 format)
-        // Y plane: 720 rows, 1280 columns
-        // UV plane: 360 rows, 1280 columns (interleaved)
-        cv::Mat yuv(1080, 1280, CV_8UC1, mem.data()); // 720 + 360 = 1080 rows
+            // Display frame
+            cv::imshow("Camera Preview", bgr);
 
-        // Convert YUV to BGR using OpenCV
-        cv::Mat bgr;
-        cv::cvtColor(yuv, bgr, cv::COLOR_YUV2BGR_NV12);
+            // Requeue the request
+            req->reuse(Request::ReuseBuffers);
+            camera->queueRequest(req);
+        });
+    }
 
-        // Display frame
-        cv::imshow("Camera Preview", bgr);
-
-        // Requeue the request
-        request->reuse(Request::ReuseBuffers);
+    // Queue initial requests
+    for (auto &request : requests) {
         camera->queueRequest(request.get());
+    }
+
+    // Main event loop
+    while (true) {
+        // Process camera events with 100ms timeout
+        int ret = cameraManager->eventDispatcher()->processEvents(100);
+        if (ret < 0) break;
 
         // Check for exit key
         if (cv::waitKey(1) == 'q') {
@@ -126,6 +125,7 @@ int main() {
 
     // Cleanup
     camera->stop();
+    allocator.free(streamConfig.stream());
     camera->release();
     cameraManager->stop();
 
