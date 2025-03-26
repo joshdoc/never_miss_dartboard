@@ -7,13 +7,13 @@
 #include <sys/mman.h>         // for mmap, munmap
 #include <fcntl.h>            // for O_RDONLY
 
-// Libcamera headers (using headers available in /usr/include/libcamera/libcamera)
-#include <libcamera.h>
-#include <camera_manager.h>
-#include <camera.h>
-#include <framebuffer_allocator.h>
-#include <request.h>
-#include <formats.h>
+// Libcamera headers
+#include <libcamera/camera_manager.h>
+#include <libcamera/camera.h>
+#include <libcamera/framebuffer_allocator.h>
+#include <libcamera/request.h>
+#include <libcamera/formats.h>
+#include <libcamera/stream.h>
 
 // OpenCV headers
 #include <opencv2/opencv.hpp>
@@ -110,62 +110,66 @@ int main()
 
     cout << "Press ESC in the OpenCV window to exit." << endl;
 
-    // Main loop: poll for completed requests and display frames.
+    // Main loop: wait for completed requests and display frames.
     while (true) {
         // Poll for completed requests.
-        // (Assuming getCompletedRequests() returns a vector<Request*> of completed requests.)
-        auto completedRequests = camera->getCompletedRequests();
-        if (completedRequests.empty()) {
-            // No completed request yet: sleep briefly and try again.
-            usleep(1000); // sleep 1 ms
+        unique_ptr<Request> completedRequest = camera->waitForRequest();  // FIX: Using waitForRequest()
+        if (!completedRequest) {
+            cerr << "No completed request" << endl;
             continue;
         }
 
-        // Process each completed request.
-        for (Request *completedRequest : completedRequests) {
-            // Retrieve the buffer from the request.
-            const auto &buffers = completedRequest->buffers();
-            if (buffers.empty()) {
-                cerr << "No buffers in completed request" << endl;
-                continue;
-            }
-            const FrameBuffer *buffer = buffers.begin()->second;
-            if (buffer->planes().empty()) {
-                cerr << "Buffer has no planes" << endl;
-                continue;
-            }
-            // For RGB888, expect one plane.
-            const FrameBuffer::Plane &plane = buffer->planes()[0];
+        // Process the completed request.
+        const auto &buffers = completedRequest->buffers();
+        if (buffers.empty()) {
+            cerr << "No buffers in completed request" << endl;
+            continue;
+        }
+        const FrameBuffer *buffer = buffers.begin()->second;
+        if (buffer->planes().empty()) {
+            cerr << "Buffer has no planes" << endl;
+            continue;
+        }
 
-            // Map the buffer memory.
-            // Note: mapping on every frame is not optimal.
-            uint8_t *data = static_cast<uint8_t*>(
-                mmap(nullptr, plane.length, PROT_READ, MAP_SHARED, plane.fd, plane.offset));
-            if (data == MAP_FAILED) {
-                perror("mmap");
-                continue;
-            }
+        // Get buffer memory file descriptor correctly
+        const FrameBuffer::Plane &plane = buffer->planes()[0];
 
-            int width = config->at(0).size.width;
-            int height = config->at(0).size.height;
-            // Wrap the data into an OpenCV Mat.
-            Mat frame(height, width, CV_8UC3, data);
+        // FIX: Correct way to access the file descriptor using plane.fd.get()
+        int fd = plane.fd.get();
+        if (fd < 0) {
+            cerr << "Invalid file descriptor" << endl;
+            continue;
+        }
 
-            // Display the frame.
-            imshow("Camera", frame);
-            int key = waitKey(1);
-            if (key == 27) { // ESC key
-                munmap(data, plane.length);
-                goto exit_loop;
-            }
+        // Map the buffer memory
+        uint8_t *data = static_cast<uint8_t*>(
+            mmap(nullptr, plane.length, PROT_READ, MAP_SHARED, fd, plane.offset));
+        if (data == MAP_FAILED) {
+            perror("mmap");
+            continue;
+        }
 
+        int width = config->at(0).size.width;
+        int height = config->at(0).size.height;
+
+        // Wrap the data into an OpenCV Mat.
+        Mat frame(height, width, CV_8UC3, data);
+
+        // Display the frame.
+        imshow("Camera", frame);
+        int key = waitKey(1);
+        if (key == 27) { // ESC key
             munmap(data, plane.length);
+            goto exit_loop;
+        }
 
-            // Re-queue the request for the next frame.
-            if (camera->queueRequest(completedRequest) < 0) {
-                cerr << "Failed to re-queue request" << endl;
-                goto exit_loop;
-            }
+        // Unmap buffer before re-queuing request
+        munmap(data, plane.length);
+
+        // Re-queue the request for the next frame.
+        if (camera->queueRequest(completedRequest.get()) < 0) {
+            cerr << "Failed to re-queue request" << endl;
+            goto exit_loop;
         }
     }
 
