@@ -1,53 +1,49 @@
+#include <iostream>
 #include <opencv2/opencv.hpp>
-#include <chrono>
-#include <thread>
+#include "libcamera_app.hpp"  // Raspberry Pi libcamera wrapper
 
 int main() {
-    cv::VideoCapture cap("/dev/video0", cv::CAP_V4L2);
-    
-    if (!cap.isOpened()) {
-        std::cerr << "ERROR: Camera not accessible" << std::endl;
+    try {
+        // Initialize libcamera
+        LibcameraApp app;
+        app.OpenCamera();
+
+        // Configure the camera for 640x480 @ 30FPS
+        StreamInfo streamConfig = app.ConfigureVideo({{"width", 640}, {"height", 480}, {"framerate", 30}});
+        app.StartCamera();
+
+        std::cout << "Starting video feed... Press 'q' to exit.\n";
+
+        while (true) {
+            // Capture frame
+            LibcameraApp::Msg msg = app.Wait();
+            if (msg.type == LibcameraApp::MsgType::RequestComplete) {
+                CompletedRequestPtr &request = std::get<CompletedRequestPtr>(msg.payload);
+                libcamera::FrameBuffer *buffer = app.ViewfinderStream()->GetFrameBuffer(request);
+
+                if (buffer) {
+                    // Convert frame to OpenCV format
+                    cv::Mat frame(streamConfig.height, streamConfig.width, CV_8UC3, buffer->planes()[0].data());
+                    cv::cvtColor(frame, frame, cv::COLOR_RGB2BGR);  // Convert from RGB to BGR for OpenCV
+                    
+                    // Display frame
+                    cv::imshow("Camera Feed", frame);
+                    
+                    // Exit if 'q' is pressed
+                    if (cv::waitKey(1) == 'q') break;
+                }
+            }
+        }
+
+        // Cleanup
+        app.StopCamera();
+        cv::destroyAllWindows();
+        std::cout << "Camera stopped.\n";
+
+    } catch (const std::exception &e) {
+        std::cerr << "Error: " << e.what() << std::endl;
         return -1;
     }
 
-    // Critical settings for Pi camera
-    cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
-    cap.set(cv::CAP_PROP_FPS, 15);  // Start with lower FPS
-    cap.set(cv::CAP_PROP_BUFFERSIZE, 3);  // Reduce buffer size
-    cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
-
-    // Allow camera to warm up
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-    
-    cv::Mat frame;
-    int frame_count = 0;
-    const int max_attempts = 30;
-
-    while (frame_count < max_attempts) {
-        if (!cap.grab()) {
-            std::cerr << "WARNING: Frame not grabbed" << std::endl;
-            continue;
-        }
-        
-        if (!cap.retrieve(frame)) {
-            std::cerr << "WARNING: Frame not retrieved" << std::endl;
-            continue;
-        }
-        
-        if (frame.empty()) {
-            std::cerr << "WARNING: Empty frame received" << std::endl;
-        } else {
-            std::cout << "Success! Frame size: " 
-                      << frame.cols << "x" << frame.rows << std::endl;
-            cv::imshow("Camera Feed", frame);
-            frame_count++;
-        }
-        
-        if (cv::waitKey(1) == 'q') break;
-    }
-
-    cap.release();
-    cv::destroyAllWindows();
     return 0;
 }
