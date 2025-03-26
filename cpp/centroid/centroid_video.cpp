@@ -1,80 +1,171 @@
 #include <iostream>
+#include <chrono>
+#include <thread>
+#include <memory>
+#include <vector>
+
+// Libcamera headers (the include path is set so that they can be found under libcamera/)
+#include <libcamera/libcamera.h>
+#include <libcamera/camera_manager.h>
+#include <libcamera/camera.h>
+#include <libcamera/camera_configuration.h>
+#include <libcamera/framebuffer_allocator.h>
+#include <libcamera/request.h>
+#include <libcamera/formats.h>
+
+// OpenCV headers
 #include <opencv2/opencv.hpp>
 
-// Adjusted includes for nested directory structure
-#include <libcamera/libcamera/libcamera.h>
-#include <libcamera/libcamera/controls.h>
-#include <libcamera/libcamera/camera_manager.h>
-
 using namespace libcamera;
+using namespace std;
+using namespace cv;
 
-int main() {
-    // Initialize camera system
-    CameraManager manager;
-    manager.start();
+int main()
+{
+    // Create and start the CameraManager.
+    CameraManager cm;
+    cm.start();
 
-    if (manager.cameras().empty()) {
-        std::cerr << "No cameras found!" << std::endl;
-        return 1;
+    if (cm.cameras().empty()) {
+        cerr << "No cameras available" << endl;
+        return -1;
     }
 
-    std::shared_ptr<Camera> camera = manager.get(manager.cameras()[0]->id());
-    camera->acquire();
+    // Open the first available camera.
+    std::shared_ptr<Camera> camera = cm.cameras()[0];
+    if (!camera) {
+        cerr << "Unable to access camera" << endl;
+        return -1;
+    }
+    if (camera->acquire()) {
+        cerr << "Failed to acquire camera" << endl;
+        return -1;
+    }
 
-    // Configure stream (RGB format for OpenCV compatibility)
-    std::unique_ptr<CameraConfiguration> config = camera->generateConfiguration({StreamRole::Viewfinder});
-    config->at(0).pixelFormat = formats::RGB888;
-    config->at(0).size = {640, 480};
-    config->validate();
+    // Generate a configuration for preview (viewfinder) mode.
+    std::unique_ptr<CameraConfiguration> config =
+        camera->generateConfiguration({ StreamRole::Viewfinder });
+    if (!config) {
+        cerr << "Failed to generate camera configuration" << endl;
+        return -1;
+    }
 
-    // Allocate buffers
+    // Configure the first stream:
+    // Set a desired resolution and pixel format.
+    // Note: libcamera typically produces YUV formats.
+    config->at(0).pixelFormat = formats::YUV420;
+    config->at(0).size = { 640, 480 };
+    config->at(0).bufferCount = 4;
+
+    // Validate the configuration.
+    CameraConfiguration::Status validation = config->validate();
+    if (validation == CameraConfiguration::Invalid) {
+        cerr << "Invalid camera configuration" << endl;
+        return -1;
+    }
+
+    // Apply the configuration.
+    if (camera->configure(config.get()) < 0) {
+        cerr << "Failed to configure camera" << endl;
+        return -1;
+    }
+
+    // Create a framebuffer allocator for the camera.
     FrameBufferAllocator allocator(camera);
-    allocator.allocate(config->at(0).stream());
-
-    if (camera->configure(config.get())) {
-        std::cerr << "Camera configuration failed!" << std::endl;
-        return 1;
+    for (const StreamConfiguration &cfg : *config) {
+        if (allocator.allocate(cfg.stream()) < 0) {
+            cerr << "Failed to allocate buffers" << endl;
+            return -1;
+        }
     }
 
-    camera->start();
-    cv::namedWindow("Grayscale Feed", cv::WINDOW_NORMAL);
-
-    // Frame processing callback
-    camera->requestCompleted.connect([&](Request *request) {
-        if (request->status() == Request::RequestCancelled) return;
-
-        // Access frame data
-        FrameBuffer *buffer = request->buffers().begin()->second;
-        Span<uint8_t> data = buffer->planes()[0].data;
-
-        // Convert to OpenCV Mat and process
-        cv::Mat frame(config->at(0).size.height, config->at(0).size.width, 
-                     CV_8UC3, data.data());
-        cv::Mat gray;
-        cv::cvtColor(frame, gray, cv::COLOR_RGB2GRAY);
-        
-        // Display grayscale frame
-        cv::imshow("Grayscale Feed", gray);
-        cv::waitKey(1);
-
-        request->reuse();
-    });
-
-    // Queue requests
-    for (auto &buffer : allocator.buffers()) {
-        std::unique_ptr<Request> request = camera->createRequest();
-        request->addBuffer(config->at(0).stream(), buffer.get());
-        camera->queueRequest(request.release());
+    // Create capture requests and attach allocated buffers.
+    std::vector<std::unique_ptr<Request>> requests;
+    for (const StreamConfiguration &cfg : *config) {
+        const std::vector<std::unique_ptr<FrameBuffer>> &buffers =
+            allocator.buffers(cfg.stream());
+        for (std::unique_ptr<FrameBuffer> &buffer : buffers) {
+            std::unique_ptr<Request> request = camera->createRequest();
+            if (!request) {
+                cerr << "Failed to create request" << endl;
+                return -1;
+            }
+            if (request->addBuffer(cfg.stream(), buffer.get()) < 0) {
+                cerr << "Failed to add buffer to request" << endl;
+                return -1;
+            }
+            requests.push_back(std::move(request));
+        }
     }
 
-    // Run until 'q' is pressed
-    std::cout << "Press q to quit..." << std::endl;
-    while (cv::waitKey(1) != 'q');
+    // Start the camera streaming.
+    if (camera->start() < 0) {
+        cerr << "Failed to start camera streaming" << endl;
+        return -1;
+    }
 
-    // Cleanup
+    // Queue all requests.
+    for (auto &req : requests) {
+        if (camera->queueRequest(req.get()) < 0) {
+            cerr << "Failed to queue request" << endl;
+            return -1;
+        }
+    }
+
+    // Main loop: Capture frames for a fixed duration.
+    auto startTime = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - startTime < std::chrono::seconds(10))
+    {
+        // Blocking wait for a completed request.
+        std::unique_ptr<Request> completedRequest = camera->waitForRequest();
+        if (!completedRequest) {
+            cerr << "Error waiting for request" << endl;
+            break;
+        }
+
+        // Assume a single stream; retrieve the first buffer.
+        const auto &buffers = completedRequest->buffers();
+        if (buffers.empty()) {
+            cerr << "No buffers in completed request" << endl;
+            continue;
+        }
+        // Get the buffer for the stream.
+        const FrameBuffer *buffer = buffers.begin()->second;
+
+        // For demonstration, assume the first plane holds the Y (luma) data.
+        if (buffer->planes().empty()) {
+            cerr << "Buffer has no planes" << endl;
+            continue;
+        }
+        const FrameBuffer::Plane &plane = buffer->planes()[0];
+
+        // Create an OpenCV Mat from the Y plane data.
+        uint8_t *data = static_cast<uint8_t *>(plane.mem);
+        int width = config->at(0).size.width;
+        int height = config->at(0).size.height;
+        Mat yPlane(height, width, CV_8UC1, data);
+
+        // Convert the grayscale image to BGR (not a full YUV conversion).
+        Mat bgr;
+        cvtColor(yPlane, bgr, COLOR_GRAY2BGR);
+
+        // Display the frame.
+        imshow("Camera", bgr);
+        if (waitKey(1) == 27)  // Exit if ESC is pressed.
+            break;
+
+        // Re-queue the request for the next frame.
+        if (camera->queueRequest(completedRequest.get()) < 0) {
+            cerr << "Failed to re-queue request" << endl;
+            break;
+        }
+    }
+
+    // Clean up: stop streaming, release camera.
     camera->stop();
     camera->release();
-    manager.stop();
+    cm.stop();
 
     return 0;
 }
+
