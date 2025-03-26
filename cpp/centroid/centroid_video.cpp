@@ -4,7 +4,7 @@
 #include <memory>
 #include <vector>
 
-// Libcamera headers (the include path is set so that they can be found under libcamera/)
+// Libcamera headers (adjust include path if needed)
 #include <libcamera/libcamera.h>
 #include <libcamera/camera_manager.h>
 #include <libcamera/camera.h>
@@ -22,17 +22,16 @@ using namespace cv;
 
 int main()
 {
-    // Create and start the CameraManager.
-    CameraManager cm;
-    cm.start();
-
-    if (cm.cameras().empty()) {
+    // Initialize the CameraManager and start it.
+    CameraManager camManager;
+    camManager.start();
+    if (camManager.cameras().empty()) {
         cerr << "No cameras available" << endl;
         return -1;
     }
 
     // Open the first available camera.
-    std::shared_ptr<Camera> camera = cm.cameras()[0];
+    shared_ptr<Camera> camera = camManager.cameras()[0];
     if (!camera) {
         cerr << "Unable to access camera" << endl;
         return -1;
@@ -43,23 +42,21 @@ int main()
     }
 
     // Generate a configuration for preview (viewfinder) mode.
-    std::unique_ptr<CameraConfiguration> config =
+    unique_ptr<CameraConfiguration> config =
         camera->generateConfiguration({ StreamRole::Viewfinder });
     if (!config) {
         cerr << "Failed to generate camera configuration" << endl;
         return -1;
     }
 
-    // Configure the first stream:
-    // Set a desired resolution and pixel format.
-    // Note: libcamera typically produces YUV formats.
-    config->at(0).pixelFormat = formats::YUV420;
-    config->at(0).size = { 640, 480 };
-    config->at(0).bufferCount = 4;
+    // Set stream parameters:
+    // Use RGB888 so that the image data can be directly used with OpenCV.
+    config->at(0).pixelFormat = formats::RGB888;
+    config->at(0).size = {640, 480};
+    config->at(0).bufferCount = 4; // Using 4 buffers
 
     // Validate the configuration.
-    CameraConfiguration::Status validation = config->validate();
-    if (validation == CameraConfiguration::Invalid) {
+    if (config->validate() == CameraConfiguration::Invalid) {
         cerr << "Invalid camera configuration" << endl;
         return -1;
     }
@@ -70,7 +67,7 @@ int main()
         return -1;
     }
 
-    // Create a framebuffer allocator for the camera.
+    // Create a framebuffer allocator.
     FrameBufferAllocator allocator(camera);
     for (const StreamConfiguration &cfg : *config) {
         if (allocator.allocate(cfg.stream()) < 0) {
@@ -80,12 +77,11 @@ int main()
     }
 
     // Create capture requests and attach allocated buffers.
-    std::vector<std::unique_ptr<Request>> requests;
+    vector<unique_ptr<Request>> requests;
     for (const StreamConfiguration &cfg : *config) {
-        const std::vector<std::unique_ptr<FrameBuffer>> &buffers =
-            allocator.buffers(cfg.stream());
-        for (std::unique_ptr<FrameBuffer> &buffer : buffers) {
-            std::unique_ptr<Request> request = camera->createRequest();
+        const vector<unique_ptr<FrameBuffer>> &buffers = allocator.buffers(cfg.stream());
+        for (auto &buffer : buffers) {
+            unique_ptr<Request> request = camera->createRequest();
             if (!request) {
                 cerr << "Failed to create request" << endl;
                 return -1;
@@ -94,7 +90,7 @@ int main()
                 cerr << "Failed to add buffer to request" << endl;
                 return -1;
             }
-            requests.push_back(std::move(request));
+            requests.push_back(move(request));
         }
     }
 
@@ -112,60 +108,46 @@ int main()
         }
     }
 
-    // Main loop: Capture frames for a fixed duration.
-    auto startTime = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - startTime < std::chrono::seconds(10))
-    {
-        // Blocking wait for a completed request.
-        std::unique_ptr<Request> completedRequest = camera->waitForRequest();
+    cout << "Press ESC in the OpenCV window to exit." << endl;
+
+    // Main loop: retrieve and display frames.
+    while (true) {
+        // Wait for a completed request.
+        unique_ptr<Request> completedRequest = camera->waitForRequest();
         if (!completedRequest) {
             cerr << "Error waiting for request" << endl;
             break;
         }
 
-        // Assume a single stream; retrieve the first buffer.
+        // Get the first (and only) stream buffer.
         const auto &buffers = completedRequest->buffers();
         if (buffers.empty()) {
             cerr << "No buffers in completed request" << endl;
             continue;
         }
-        // Get the buffer for the stream.
         const FrameBuffer *buffer = buffers.begin()->second;
-
-        // For demonstration, assume the first plane holds the Y (luma) data.
         if (buffer->planes().empty()) {
             cerr << "Buffer has no planes" << endl;
             continue;
         }
+
+        // For an RGB888 stream, we expect a single plane containing 3 bytes per pixel.
         const FrameBuffer::Plane &plane = buffer->planes()[0];
 
-        // Create an OpenCV Mat from the Y plane data.
+        // Wrap the data into an OpenCV Mat.
+        // Note: Make sure that the buffer memory is mapped and accessible.
         uint8_t *data = static_cast<uint8_t *>(plane.mem);
         int width = config->at(0).size.width;
         int height = config->at(0).size.height;
-        Mat yPlane(height, width, CV_8UC1, data);
-
-        // Convert the grayscale image to BGR (not a full YUV conversion).
-        Mat bgr;
-        cvtColor(yPlane, bgr, COLOR_GRAY2BGR);
+        Mat frame(height, width, CV_8UC3, data);
 
         // Display the frame.
-        imshow("Camera", bgr);
-        if (waitKey(1) == 27)  // Exit if ESC is pressed.
+        imshow("Camera", frame);
+        int key = waitKey(1);
+        if (key == 27) // ESC key to exit.
             break;
 
         // Re-queue the request for the next frame.
         if (camera->queueRequest(completedRequest.get()) < 0) {
-            cerr << "Failed to re-queue request" << endl;
-            break;
-        }
-    }
-
-    // Clean up: stop streaming, release camera.
-    camera->stop();
-    camera->release();
-    cm.stop();
-
-    return 0;
-}
+            cerr << "Failed to re-
 
