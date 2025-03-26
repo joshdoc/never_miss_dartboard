@@ -57,47 +57,45 @@ Point processFrame(Mat &frame, Mat &kernel, double scale_factor, int threshold_v
 }
 
 int main() {
-    // Initialize camera
-    VideoCapture cap(0); // Use 0 for default camera
+    // GStreamer pipeline for libcamera
+    string pipeline = "libcamerasrc ! video/x-raw,width=640,height=480,format=NV12 "
+                      "! videoconvert ! video/x-raw,format=BGR "
+                      "! appsink drop=1";
+    
+    VideoCapture cap(pipeline, CAP_GSTREAMER);
+    
     if (!cap.isOpened()) {
-        cerr << "Error opening camera!" << endl;
+        cerr << "Failed to open camera! Try these fixes:" << endl;
+        cerr << "1. Update system: sudo apt update && sudo apt upgrade" << endl;
+        cerr << "2. Install GStreamer plugins: sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev" << endl;
+        cerr << "3. Verify camera works: libcamera-hello" << endl;
         return -1;
     }
 
-    // Set camera resolution (lower for better performance)
-    cap.set(CAP_PROP_FRAME_WIDTH, 640);
-    cap.set(CAP_PROP_FRAME_HEIGHT, 480);
-
-    // Create morphology kernel once
+    // Create morphology kernel
     Mat kernel = getStructuringElement(MORPH_RECT, Size(9, 9));
     double scale_factor = 0.4;
-    int threshold_value = 25; // Adjust based on your lighting
+    int threshold_value = 25;
 
     namedWindow("Centroid Tracking", WINDOW_NORMAL);
 
     while (true) {
         Mat frame;
-        cap >> frame; // Capture frame
-        if (frame.empty()) break;
-
-        // Process frame and get centroid
-        auto start = high_resolution_clock::now();
-        Point centroid = processFrame(frame, kernel, scale_factor, threshold_value);
-        auto stop = high_resolution_clock::now();
-
-        // Draw centroid
-        if (centroid.x != -1 && centroid.y != -1) {
-            circle(frame, centroid, 10, Scalar(0, 0, 255), -1);
+        cap >> frame;
+        if (frame.empty()) {
+            cerr << "Empty frame received!" << endl;
+            break;
         }
 
-        // Display processing time
-        auto duration = duration_cast<milliseconds>(stop - start);
-        putText(frame, "Process Time: " + to_string(duration.count()) + "ms", 
-                Point(10, 30), FONT_HERSHEY_SIMPLEX, 0.7, Scalar(0, 255, 0), 2);
+        // Process frame
+        Point centroid = processFrame(frame, kernel, scale_factor, threshold_value);
 
+        // Visualization
+        if (centroid.x != -1) {
+            circle(frame, centroid, 10, Scalar(0, 0, 255), -1);
+        }
         imshow("Centroid Tracking", frame);
 
-        // Exit on 'q' key
         if (waitKey(1) == 'q') break;
     }
 
