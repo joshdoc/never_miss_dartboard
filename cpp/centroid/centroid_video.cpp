@@ -1,62 +1,107 @@
+#include <opencv2/opencv.hpp>
 #include <iostream>
-#include <memory>
-#include <string>
+#include <chrono>
 
-#include "core/libcamera_app.hpp"
-#include "output/file_output.hpp"
-#include "encoder/h264_encoder.hpp"
+using namespace cv;
+using namespace std;
+using namespace std::chrono;
 
-int main(int argc, char *argv[]) {
-    // Configuration parameters (customize as needed)
-    const std::string output_filename = "output.h264";
-    const unsigned int width = 1280;
-    const unsigned int height = 720;
-    const unsigned int framerate = 30;
-    const unsigned int bitrate = 1000000; // 1 Mbps
+Point processFrame(Mat &frame, Mat &kernel, double scale_factor, int threshold_value) {
+    Mat gray;
+    cvtColor(frame, gray, COLOR_BGR2GRAY);
 
-    // Initialize the camera application
-    LibcameraApp app;
-    try {
-        app.OpenCamera();
-        app.ConfigureVideo(width, height, framerate);
-    } catch (const std::exception &e) {
-        std::cerr << "Camera configuration error: " << e.what() << std::endl;
-        return 1;
-    }
+    // Downsample the grayscale image
+    Mat gray_downsampled;
+    resize(gray, gray_downsampled, Size(), scale_factor, scale_factor, INTER_NEAREST);
 
-    Stream *video_stream = app.VideoStream();
-    if (!video_stream) {
-        std::cerr << "Failed to configure video stream" << std::endl;
-        return 1;
-    }
+    // Noise reduction
+    GaussianBlur(gray_downsampled, gray_downsampled, Size(3, 3), 0);
 
-    // Setup H.264 encoder
-    H264Encoder encoder;
-    encoder.Configure(video_stream->configuration(), bitrate, H264Encoder::Profile::Main);
+    // Top-hat morphology
+    Mat eroded, dilated, top_hat;
+    erode(gray_downsampled, eroded, kernel);
+    dilate(eroded, dilated, kernel);
+    subtract(gray_downsampled, dilated, top_hat);
 
-    // Setup file output
-    FileOutput output(output_filename);
-    encoder.SetOutputReadyCallback([&](void *data, size_t size, int64_t timestamp_us, bool keyframe) {
-        output.OutputReady(data, size, timestamp_us, keyframe);
-    });
+    // Thresholding
+    Mat binary;
+    threshold(top_hat, binary, threshold_value, 255, THRESH_BINARY);
 
-    // Start capturing
-    app.StartCamera();
-    encoder.Start();
+    // Find contours
+    vector<vector<Point>> contours;
+    findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
 
-    // Event loop to process video frames
-    while (true) {
-        LibcameraApp::Msg msg = app.Wait();
-        if (msg.type == LibcameraApp::MsgType::Quit)
-            break;
-        else if (msg.type == LibcameraApp::MsgType::RequestComplete) {
-            auto &completed_request = std::get<CompletedRequestPtr>(msg.payload);
-            encoder.EncodeBuffer(completed_request, video_stream);
+    // Find largest contour and compute centroid
+    Point centroid(-1, -1);
+    double max_area = 0;
+    int max_index = -1;
+    for (size_t i = 0; i < contours.size(); i++) {
+        double area = contourArea(contours[i]);
+        if (area > max_area) {
+            max_area = area;
+            max_index = i;
         }
     }
 
-    // Cleanup
-    encoder.Stop();
-    app.StopCamera();
+    if (max_index != -1) {
+        Moments M = moments(contours[max_index]);
+        if (M.m00 > 0) {
+            int cx_down = static_cast<int>(M.m10 / M.m00);
+            int cy_down = static_cast<int>(M.m01 / M.m00);
+            centroid.x = static_cast<int>(cx_down / scale_factor);
+            centroid.y = static_cast<int>(cy_down / scale_factor);
+        }
+    }
+
+    return centroid;
+}
+
+int main() {
+    // Initialize camera
+    VideoCapture cap(0); // Use 0 for default camera
+    if (!cap.isOpened()) {
+        cerr << "Error opening camera!" << endl;
+        return -1;
+    }
+
+    // Set camera resolution (lower for better performance)
+    cap.set(CAP_PROP_FRAME_WIDTH, 640);
+    cap.set(CAP_PROP_FRAME_HEIGHT, 480);
+
+    // Create morphology kernel once
+    Mat kernel = getStructuringElement(MORPH_RECT, Size(9, 9));
+    double scale_factor = 0.4;
+    int threshold_value = 25; // Adjust based on your lighting
+
+    namedWindow("Centroid Tracking", WINDOW_NORMAL);
+
+    while (true) {
+        Mat frame;
+        cap >> frame; // Capture frame
+        if (frame.empty()) break;
+
+        // Process frame and get centroid
+        auto start = high_resolution_clock::now();
+        Point centroid = processFrame(frame, kernel, scale_factor, threshold_value);
+        auto stop = high_resolution_clock::now();
+
+        // Draw centroid
+        if (centroid.x != -1 && centroid.y != -1) {
+            circle(frame, centroid, 10, Scalar(0, 0, 255), -1);
+        }
+
+        // Display processing time
+        auto duration = duration_cast<milliseconds>(stop - start);
+        putText(frame, "Process Time: " + to_string(duration.count()) + "ms", 
+                Point(10, 30), FONT_HERSHEY_SIMPLEX, 0.7, Scalar(0, 255, 0), 2);
+
+        imshow("Centroid Tracking", frame);
+
+        // Exit on 'q' key
+        if (waitKey(1) == 'q') break;
+    }
+
+    cap.release();
+    destroyAllWindows();
     return 0;
 }
