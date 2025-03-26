@@ -3,15 +3,17 @@
 #include <thread>
 #include <memory>
 #include <vector>
+#include <unistd.h>           // for usleep
+#include <sys/mman.h>         // for mmap, munmap
+#include <fcntl.h>            // for O_RDONLY
 
-// Libcamera headers (adjust include path if needed)
-#include <libcamera/libcamera.h>
-#include <libcamera/camera_manager.h>
-#include <libcamera/camera.h>
-#include <libcamera/camera_configuration.h>
-#include <libcamera/framebuffer_allocator.h>
-#include <libcamera/request.h>
-#include <libcamera/formats.h>
+// Libcamera headers (using headers available in /usr/include/libcamera/libcamera)
+#include <libcamera.h>
+#include <camera_manager.h>
+#include <camera.h>
+#include <framebuffer_allocator.h>
+#include <request.h>
+#include <formats.h>
 
 // OpenCV headers
 #include <opencv2/opencv.hpp>
@@ -22,7 +24,7 @@ using namespace cv;
 
 int main()
 {
-    // Initialize the CameraManager and start it.
+    // Start the CameraManager.
     CameraManager camManager;
     camManager.start();
     if (camManager.cameras().empty()) {
@@ -42,18 +44,16 @@ int main()
     }
 
     // Generate a configuration for preview (viewfinder) mode.
-    unique_ptr<CameraConfiguration> config =
-        camera->generateConfiguration({ StreamRole::Viewfinder });
+    auto config = camera->generateConfiguration({ StreamRole::Viewfinder });
     if (!config) {
         cerr << "Failed to generate camera configuration" << endl;
         return -1;
     }
 
-    // Set stream parameters:
-    // Use RGB888 so that the image data can be directly used with OpenCV.
+    // Configure the stream: use RGB888 for easy conversion to OpenCV Mat.
     config->at(0).pixelFormat = formats::RGB888;
     config->at(0).size = {640, 480};
-    config->at(0).bufferCount = 4; // Using 4 buffers
+    config->at(0).bufferCount = 4;
 
     // Validate the configuration.
     if (config->validate() == CameraConfiguration::Invalid) {
@@ -67,7 +67,7 @@ int main()
         return -1;
     }
 
-    // Create a framebuffer allocator.
+    // Allocate frame buffers.
     FrameBufferAllocator allocator(camera);
     for (const StreamConfiguration &cfg : *config) {
         if (allocator.allocate(cfg.stream()) < 0) {
@@ -94,13 +94,13 @@ int main()
         }
     }
 
-    // Start the camera streaming.
+    // Start camera streaming.
     if (camera->start() < 0) {
         cerr << "Failed to start camera streaming" << endl;
         return -1;
     }
 
-    // Queue all requests.
+    // Queue all requests initially.
     for (auto &req : requests) {
         if (camera->queueRequest(req.get()) < 0) {
             cerr << "Failed to queue request" << endl;
@@ -110,44 +110,71 @@ int main()
 
     cout << "Press ESC in the OpenCV window to exit." << endl;
 
-    // Main loop: retrieve and display frames.
+    // Main loop: poll for completed requests and display frames.
     while (true) {
-        // Wait for a completed request.
-        unique_ptr<Request> completedRequest = camera->waitForRequest();
-        if (!completedRequest) {
-            cerr << "Error waiting for request" << endl;
-            break;
-        }
-
-        // Get the first (and only) stream buffer.
-        const auto &buffers = completedRequest->buffers();
-        if (buffers.empty()) {
-            cerr << "No buffers in completed request" << endl;
-            continue;
-        }
-        const FrameBuffer *buffer = buffers.begin()->second;
-        if (buffer->planes().empty()) {
-            cerr << "Buffer has no planes" << endl;
+        // Poll for completed requests.
+        // (Assuming getCompletedRequests() returns a vector<Request*> of completed requests.)
+        auto completedRequests = camera->getCompletedRequests();
+        if (completedRequests.empty()) {
+            // No completed request yet: sleep briefly and try again.
+            usleep(1000); // sleep 1 ms
             continue;
         }
 
-        // For an RGB888 stream, we expect a single plane containing 3 bytes per pixel.
-        const FrameBuffer::Plane &plane = buffer->planes()[0];
+        // Process each completed request.
+        for (Request *completedRequest : completedRequests) {
+            // Retrieve the buffer from the request.
+            const auto &buffers = completedRequest->buffers();
+            if (buffers.empty()) {
+                cerr << "No buffers in completed request" << endl;
+                continue;
+            }
+            const FrameBuffer *buffer = buffers.begin()->second;
+            if (buffer->planes().empty()) {
+                cerr << "Buffer has no planes" << endl;
+                continue;
+            }
+            // For RGB888, expect one plane.
+            const FrameBuffer::Plane &plane = buffer->planes()[0];
 
-        // Wrap the data into an OpenCV Mat.
-        // Note: Make sure that the buffer memory is mapped and accessible.
-        uint8_t *data = static_cast<uint8_t *>(plane.mem);
-        int width = config->at(0).size.width;
-        int height = config->at(0).size.height;
-        Mat frame(height, width, CV_8UC3, data);
+            // Map the buffer memory.
+            // Note: mapping on every frame is not optimal.
+            uint8_t *data = static_cast<uint8_t*>(
+                mmap(nullptr, plane.length, PROT_READ, MAP_SHARED, plane.fd, plane.offset));
+            if (data == MAP_FAILED) {
+                perror("mmap");
+                continue;
+            }
 
-        // Display the frame.
-        imshow("Camera", frame);
-        int key = waitKey(1);
-        if (key == 27) // ESC key to exit.
-            break;
+            int width = config->at(0).size.width;
+            int height = config->at(0).size.height;
+            // Wrap the data into an OpenCV Mat.
+            Mat frame(height, width, CV_8UC3, data);
 
-        // Re-queue the request for the next frame.
-        if (camera->queueRequest(completedRequest.get()) < 0) {
-            cerr << "Failed to re-
+            // Display the frame.
+            imshow("Camera", frame);
+            int key = waitKey(1);
+            if (key == 27) { // ESC key
+                munmap(data, plane.length);
+                goto exit_loop;
+            }
 
+            munmap(data, plane.length);
+
+            // Re-queue the request for the next frame.
+            if (camera->queueRequest(completedRequest) < 0) {
+                cerr << "Failed to re-queue request" << endl;
+                goto exit_loop;
+            }
+        }
+    }
+
+exit_loop:
+    // Cleanup.
+    camera->stop();
+    camera->release();
+    camManager.stop();
+    destroyAllWindows();
+
+    return 0;
+}
