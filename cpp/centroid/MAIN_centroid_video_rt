@@ -1,0 +1,114 @@
+#include <opencv2/opencv.hpp>
+#include <chrono>
+#include <sched.h>
+#include <sys/mman.h>
+
+using namespace cv;
+using namespace std;
+
+// Real-time optimization parameters
+constexpr float SCALE_FACTOR = 0.4f;    // 1/4 resolution (160x120)
+constexpr int THRESHOLD = 50;            // Fixed threshold value
+constexpr int KERNEL_SIZE = 9;           // Morphology kernel size
+constexpr int CPU_CORE = 3;              // Isolate to core 3
+constexpr bool SHOW_BINARY = true;       // Toggle display
+
+// Pre-allocated Mats (global to prevent reallocation)
+Mat gray, small, blurred, eroded, dilated, top_hat, binary;
+
+void configure_realtime() {
+    // Lock memory to prevent swapping
+    mlockall(MCL_CURRENT | MCL_FUTURE);
+
+    // Set CPU affinity
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(CPU_CORE, &cpuset);
+    sched_setaffinity(0, sizeof(cpuset), &cpuset);
+
+    // Set real-time priority
+    struct sched_param param;
+    param.sched_priority = sched_get_priority_max(SCHED_FIFO);
+    sched_setscheduler(0, SCHED_FIFO, &param);
+}
+
+int main() {
+    configure_realtime();
+
+    // Low-latency GStreamer pipeline
+    const string pipeline = 
+        "libcamerasrc ! "
+        "video/x-raw,width=320,height=240,format=NV12,framerate=120/1 ! "
+        "videoconvert ! video/x-raw,format=GRAY8 ! "
+        "appsink drop=1 sync=false max-buffers=1";
+
+    VideoCapture cap(pipeline, CAP_GSTREAMER);
+    if (!cap.isOpened()) {
+        cerr << "Camera open failed!" << endl;
+        return -1;
+    }
+
+    // Warm-up camera (discard first frame)
+    Mat tmp;
+    cap >> tmp;
+
+    // Timing variables
+    auto last_frame = chrono::high_resolution_clock::now();
+    
+    while (true) {
+        // Frame capture
+        auto capture_start = chrono::high_resolution_clock::now();
+        if (!cap.read(gray)) break;
+
+        // Processing pipeline
+        // 1. Downsample (already at 320x240 from camera)
+        resize(gray, small, Size(), SCALE_FACTOR, SCALE_FACTOR, INTER_NEAREST);
+        
+        // 2. Fast blur using 3x3 kernel
+        GaussianBlur(small, blurred, Size(3, 3), 0);
+
+        // 3. Morphological operations with preallocated Mats
+        static const Mat kernel = getStructuringElement(MORPH_ELLIPSE, Size(KERNEL_SIZE, KERNEL_SIZE));
+        erode(blurred, eroded, kernel);
+        dilate(eroded, dilated, kernel);
+        subtract(blurred, dilated, top_hat);
+
+        // 4. Thresholding
+        threshold(top_hat, binary, THRESHOLD, 255, THRESH_BINARY);
+
+        // 5. Contour analysis
+        vector<vector<Point>> contours;
+        findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+
+        // 6. Centroid detection
+        if (!contours.empty()) {
+            // Find largest contour using moments (faster than contourArea)
+            const auto& largest = *max_element(contours.begin(), contours.end(),
+                [](const auto& a, const auto& b) {
+                    return moments(a).m00 < moments(b).m00;
+                });
+
+            Moments M = moments(largest);
+            if (M.m00 > 0) {
+                const int cx = static_cast<int>(M.m10/M.m00 / SCALE_FACTOR);
+                const int cy = static_cast<int>(M.m01/M.m00 / SCALE_FACTOR);
+                cout << cx << "," << cy << "\n";  // CSV format for low overhead
+            }
+        }
+
+        // Display handling
+        if (SHOW_BINARY) {
+            imshow("Binary", binary);
+            if (waitKey(1) == 27) break;
+        }
+
+        // Frame rate control
+        auto now = chrono::high_resolution_clock::now();
+        auto elapsed = chrono::duration_cast<chrono::milliseconds>(now - last_frame);
+        last_frame = now;
+        cout << "Frame time: " << elapsed.count() << "ms" << endl;
+    }
+
+    cap.release();
+    return 0;
+}
