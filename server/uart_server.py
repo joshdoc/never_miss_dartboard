@@ -1,7 +1,15 @@
+# ===================================================================
+# Section: Imports
+# ===================================================================
+
 import sys
 import select
 import serial
 import time
+
+# ===================================================================
+# Section: UART Functions
+# ===================================================================
 
 def configure_port(port, baudrate=115200, timeout=1):
     try:
@@ -21,34 +29,33 @@ def send_start_command(ser_list):
         except Exception as e:
             print(f"Error sending start command on {ser.port}: {e}")
 
+# ===================================================================
+# Section: Main
+# ===================================================================
+
 def main():
-    # Open both UART ports in read-write mode
-    port0 = "/dev/ttyAMA0"  # for Client 1
-    port2 = "/dev/ttyAMA2"  # for Client 2
+
+    # Opens & Configures UART Ports
+    port0 = "/dev/ttyAMA0"  # Camera 1
+    port2 = "/dev/ttyAMA2"  # Camera 2
     ser0 = configure_port(port0)
     ser2 = configure_port(port2)
     
+    # Error-Handling
     if not ser0 or not ser2:
         print("Failed to open one or more UART ports.")
         sys.exit(1)
     
-    # We'll use these for sending the start command.
+    # Wait for user input to send start command
     ports = [ser0, ser2]
-    
-    # Inform user how to start the transmission.
-    print("Press ENTER to send start command to clients...")
-    
-    # Wait for keyboard input on stdin.
+    print("Press ENTER to send start capture command to cameras...")
     rlist, _, _ = select.select([sys.stdin], [], [])
     if sys.stdin in rlist:
         line = sys.stdin.readline()
         if line.strip().lower() == "start" or line.strip() == "":
             send_start_command(ports)
     
-    print("Now waiting to receive sensor data from clients...")
-    
-    # In the main loop, we wait for sensor data from either client.
-    # Each sensor data packet is 6 bytes (three uint16 values)
+    # Loop to process incoming UART transmissions
     while True:
         rlist, _, _ = select.select([ser0.fileno(), ser2.fileno()], [], [])
         for fd in rlist:
