@@ -22,9 +22,9 @@ int main() {
     }
 
     // Parameters
-    float scale_factor = 0.5;  // Downsample factor
+    float scale_factor = 0.4;  // Downsample factor
     int threshold_value = 50;  // Adjust based on your needs
-    Mat kernel = getStructuringElement(MORPH_RECT, Size(5,5));
+    Mat kernel = getStructuringElement(MORPH_RECT, Size(9,9));
 
     namedWindow("Binary Feed", WINDOW_NORMAL);
     
