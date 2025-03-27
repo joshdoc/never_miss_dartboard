@@ -15,7 +15,7 @@ int main() {
         "appsink drop=1";
     
     // Initialize camera (replace with your camera setup)
-    VideoCapture cap(0);
+    cv::VideoCapture cap(pipeline, cv::CAP_GSTREAMER);
     if (!cap.isOpened()) {
         cerr << "Error opening camera!" << endl;
         return -1;
