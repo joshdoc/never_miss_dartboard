@@ -41,10 +41,10 @@ def hx(state):
     return np.array([u, v])
 
 # Define sigma points for UKF
-points = MerweScaledSigmaPoints(n=4, alpha=0.01, beta=2, kappa=0)
+points = MerweScaledSigmaPoints(n=5, alpha=0.01, beta=2, kappa=0)
 
 # Initialize the UKF
-ukf = UKF(dim_x=4, dim_z=2, fx=fx, hx=hx, dt=0.01, points=points)
+ukf = UKF(dim_x=5, dim_z=2, fx=fx, hx=hx, dt=0.01, points=points)
 ukf.x = np.array([0, 0, 8 * np.cos(np.radians(5)), 8 * np.sin(np.radians(5))])  # initial state: [x, z, vx, vz]
 ukf.P *= 0.3   # initial covariance
 ukf.R *= 6     # measurement noise covariance (in pixel space)
