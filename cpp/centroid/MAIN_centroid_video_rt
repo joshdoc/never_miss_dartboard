@@ -5,25 +5,17 @@
 
 using namespace cv;
 using namespace std;
+using namespace std::chrono;
 
-// Real-time optimization parameters
-constexpr float SCALE_FACTOR = 0.4f;    // 1/4 resolution (160x120)
-constexpr int THRESHOLD = 50;            // Fixed threshold value
-constexpr int KERNEL_SIZE = 9;           // Morphology kernel size
-constexpr int CPU_CORE = 3;              // Isolate to core 3
-constexpr bool SHOW_BINARY = true;       // Toggle display
-
-// Pre-allocated Mats (global to prevent reallocation)
-Mat gray, small, blurred, eroded, dilated, top_hat, binary;
-
+// Add real-time configuration function
 void configure_realtime() {
     // Lock memory to prevent swapping
     mlockall(MCL_CURRENT | MCL_FUTURE);
 
-    // Set CPU affinity
+    // Set CPU affinity to core 3
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    CPU_SET(CPU_CORE, &cpuset);
+    CPU_SET(3, &cpuset);
     sched_setaffinity(0, sizeof(cpuset), &cpuset);
 
     // Set real-time priority
@@ -33,82 +25,90 @@ void configure_realtime() {
 }
 
 int main() {
-    configure_realtime();
+    configure_realtime();  // Added real-time config
 
-    // Low-latency GStreamer pipeline
-    const string pipeline = 
+    // Original pipeline with low-latency tweaks
+    const std::string pipeline = 
         "libcamerasrc ! "
-        "video/x-raw,width=320,height=240,format=NV12,framerate=120/1 ! "
-        "videoconvert ! video/x-raw,format=GRAY8 ! "
-        "appsink drop=1 sync=false max-buffers=1";
+        "video/x-raw,width=640,height=480,format=NV12,framerate=120/1 ! "  // Increased framerate
+        "videoconvert ! video/x-raw,format=BGR ! "
+        "appsink drop=1 sync=false max-buffers=1";  // Low-latency options
 
     VideoCapture cap(pipeline, CAP_GSTREAMER);
     if (!cap.isOpened()) {
-        cerr << "Camera open failed!" << endl;
+        cerr << "Error opening camera!" << endl;
         return -1;
     }
 
-    // Warm-up camera (discard first frame)
-    Mat tmp;
-    cap >> tmp;
+    // Original parameters kept
+    float scale_factor = 0.4;
+    int threshold_value = 50;
+    Mat kernel = getStructuringElement(MORPH_RECT, Size(9,9));
+
+    // Pre-allocate Mats (preserve original logic)
+    Mat gray, binary;
+    vector<vector<Point>> contours;
+    namedWindow("Binary Feed", WINDOW_NORMAL);
+
+    // Warm-up frame
+    Mat dummy;
+    cap.read(dummy);
 
     // Timing variables
-    auto last_frame = chrono::high_resolution_clock::now();
+    auto last_frame = high_resolution_clock::now();
     
     while (true) {
-        // Frame capture
-        auto capture_start = chrono::high_resolution_clock::now();
-        if (!cap.read(gray)) break;
+        // Original frame capture
+        Mat frame;
+        if (!cap.read(frame)) break;
 
-        // Processing pipeline
-        // 1. Downsample (already at 320x240 from camera)
-        resize(gray, small, Size(), SCALE_FACTOR, SCALE_FACTOR, INTER_NEAREST);
+        // Original processing pipeline preserved
+        cvtColor(frame, gray, COLOR_BGR2GRAY);
+        resize(gray, gray, Size(), scale_factor, scale_factor, INTER_NEAREST);
+        GaussianBlur(gray, gray, Size(3, 3), 0);
         
-        // 2. Fast blur using 3x3 kernel
-        GaussianBlur(small, blurred, Size(3, 3), 0);
-
-        // 3. Morphological operations with preallocated Mats
-        static const Mat kernel = getStructuringElement(MORPH_ELLIPSE, Size(KERNEL_SIZE, KERNEL_SIZE));
-        erode(blurred, eroded, kernel);
+        Mat eroded, dilated, top_hat;
+        erode(gray, eroded, kernel);
         dilate(eroded, dilated, kernel);
-        subtract(blurred, dilated, top_hat);
+        top_hat = gray - dilated;
+        
+        threshold(top_hat, binary, threshold_value, 255, THRESH_BINARY);
 
-        // 4. Thresholding
-        threshold(top_hat, binary, THRESHOLD, 255, THRESH_BINARY);
-
-        // 5. Contour analysis
-        vector<vector<Point>> contours;
+        // Original contour logic with speed optimization
         findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
-
-        // 6. Centroid detection
+        Point centroid(-1, -1);
         if (!contours.empty()) {
-            // Find largest contour using moments (faster than contourArea)
-            const auto& largest = *max_element(contours.begin(), contours.end(),
-                [](const auto& a, const auto& b) {
-                    return moments(a).m00 < moments(b).m00;
-                });
-
-            Moments M = moments(largest);
-            if (M.m00 > 0) {
-                const int cx = static_cast<int>(M.m10/M.m00 / SCALE_FACTOR);
-                const int cy = static_cast<int>(M.m01/M.m00 / SCALE_FACTOR);
-                cout << cx << "," << cy << "\n";  // CSV format for low overhead
+            // Faster contour selection using moments comparison
+            double max_area = 0;
+            int max_index = 0;
+            for(size_t i = 0; i < contours.size(); ++i) {
+                double area = moments(contours[i]).m00;
+                if(area > max_area) {
+                    max_area = area;
+                    max_index = i;
+                }
+            }
+            
+            Moments M = moments(contours[max_index]);
+            if (M.m00 != 0) {
+                centroid.x = static_cast<int>(M.m10/M.m00 / scale_factor);
+                centroid.y = static_cast<int>(M.m01/M.m00 / scale_factor);
+                // Minimal-output version
+                printf("%d,%d\n", centroid.x, centroid.y);
             }
         }
 
-        // Display handling
-        if (SHOW_BINARY) {
-            imshow("Binary", binary);
-            if (waitKey(1) == 27) break;
-        }
+        // Original display kept but with frame timing
+        imshow("Binary Feed", binary);
 
-        // Frame rate control
-        auto now = chrono::high_resolution_clock::now();
-        auto elapsed = chrono::duration_cast<chrono::milliseconds>(now - last_frame);
+        // Frame time monitoring
+        auto now = high_resolution_clock::now();
+        auto elapsed = duration_cast<milliseconds>(now - last_frame);
         last_frame = now;
-        cout << "Frame time: " << elapsed.count() << "ms" << endl;
+        if(waitKey(1) == 27) break;
     }
 
     cap.release();
+    destroyAllWindows();
     return 0;
 }
