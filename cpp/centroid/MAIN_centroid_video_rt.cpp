@@ -11,14 +11,10 @@ using namespace std::chrono;
 void configure_realtime() {
     // Lock memory to prevent swapping
     mlockall(MCL_CURRENT | MCL_FUTURE);
-
-    // Set CPU affinity to core 3
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(3, &cpuset);
     sched_setaffinity(0, sizeof(cpuset), &cpuset);
-
-    // Set real-time priority
     struct sched_param param;
     param.sched_priority = sched_get_priority_max(SCHED_FIFO);
     sched_setscheduler(0, SCHED_FIFO, &param);
@@ -27,7 +23,6 @@ void configure_realtime() {
 int main() {
     configure_realtime();  // Added real-time config
 
-    // Original pipeline with low-latency tweaks
     const std::string pipeline = 
         "libcamerasrc ! "
         "video/x-raw,width=640,height=480,format=NV12,framerate=120/1 ! "  // Increased framerate
@@ -40,12 +35,12 @@ int main() {
         return -1;
     }
 
-    // Original parameters kept
+    // Parameters
     float scale_factor = 0.4;
     int threshold_value = 50;
     Mat kernel = getStructuringElement(MORPH_RECT, Size(9,9));
 
-    // Pre-allocate Mats (preserve original logic)
+    // Pre-allocate Mats
     Mat gray, binary;
     vector<vector<Point>> contours;
     namedWindow("Binary Feed", WINDOW_NORMAL);
@@ -62,23 +57,24 @@ int main() {
         Mat frame;
         if (!cap.read(frame)) break;
 
-        // Original processing pipeline preserved
+        // Grayscale, resize, and blur
         cvtColor(frame, gray, COLOR_BGR2GRAY);
         resize(gray, gray, Size(), scale_factor, scale_factor, INTER_NEAREST);
         GaussianBlur(gray, gray, Size(3, 3), 0);
-        
+
+        // Top-hat
         Mat eroded, dilated, top_hat;
         erode(gray, eroded, kernel);
         dilate(eroded, dilated, kernel);
         top_hat = gray - dilated;
-        
+
+        // Thresholding
         threshold(top_hat, binary, threshold_value, 255, THRESH_BINARY);
 
-        // Original contour logic with speed optimization
+        // Contouring
         findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
         Point centroid(-1, -1);
         if (!contours.empty()) {
-            // Faster contour selection using moments comparison
             double max_area = 0;
             int max_index = 0;
             for(size_t i = 0; i < contours.size(); ++i) {
@@ -98,7 +94,7 @@ int main() {
             }
         }
 
-        // Original display kept but with frame timing
+        // Binary Display
         imshow("Binary Feed", binary);
 
         // Frame time monitoring
