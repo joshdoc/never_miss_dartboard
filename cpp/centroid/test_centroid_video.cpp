@@ -6,6 +6,14 @@ using namespace std;
 using namespace std::chrono;
 
 int main() {
+      // GStreamer pipeline configuration
+    const std::string pipeline = 
+        "libcamerasrc ! "
+        "video/x-raw,width=640,height=480,format=NV12 ! "
+        "videoconvert ! "
+        "video/x-raw,format=BGR ! "
+        "appsink drop=1";
+    
     // Initialize camera (replace with your camera setup)
     VideoCapture cap(0);
     if (!cap.isOpened()) {
