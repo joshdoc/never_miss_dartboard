@@ -193,23 +193,26 @@ int configurePort(int fd, speed_t baud) {
     return 0;
 }
 
-// Waits for the "START" command from the server.
 void waitForStartCommand(int fd) {
     std::string command;
     char ch;
-    cout << "UART Thread: Waiting for start command from server...\n";
+    cout << "UART Thread: Waiting for START command...\n";
+    
     while (true) {
         ssize_t n = read(fd, &ch, 1);
         if (n > 0) {
             command.push_back(ch);
-            if (command.find("START") != std::string::npos) {
-                cout << "UART Thread: Received start command: " << command;
+            
+            // Check if "START\n" has been received
+            if (command.find("START\n") != std::string::npos) {
+                cout << "UART Thread: Received START command.\n";
                 break;
             }
         }
-        this_thread::sleep_for(10ms);
+        this_thread::sleep_for(10ms);  // Avoid CPU overuse
     }
 }
+
 
 // UART thread function.
 // After receiving the start command, it waits for a notification each time
