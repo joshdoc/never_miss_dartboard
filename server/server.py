@@ -37,6 +37,72 @@ def send_start_command(ser_list):
             print(f"Error sending start command on {ser.port}: {e}")
 
 # ===================================================================
+# Section: Prediction Functions
+# ===================================================================
+
+# Define the state transition function (2D kinematics with kv drag)
+def fx(state, dt):
+    """
+    State transition function for 2D projectile motion with kv drag.
+    State: [x, z, vx, vz]
+    """
+    x, z, vx, vz, Y = state
+    
+    kv = 0.67  # Linear drag coefficient
+    g = 9.81   # Gravity (acts in -z direction)
+    
+    # Compute acceleration
+    ax = -kv * vx
+    az = -kv * vz - g  # Include gravity
+    
+    # Update velocity (Euler integration)
+    vx_new = vx + ax * dt
+    vz_new = vz + az * dt
+    
+    # Update position
+    x_new = x + vx * dt
+    z_new = z + vz * dt
+    Y_new = Y
+    return np.array([x_new, z_new, vx_new, vz_new, Y_new])
+
+# Measurement function: maps (x, z) to pixel coordinates (u, v)
+def hx(state):
+    x, z, vx, vz, Y = state
+    u = cx + (f * x) / Y
+    v = cy + (f * z) / Y
+    return np.array([u, v])
+
+# Analytical propagation for x(t) and z(t)
+def propagate_state_analytical(state, t, kv=0.67, g=9.81):
+    """
+    Propagate the state analytically over time t.
+    For x-dynamics:
+        x(t) = x0 + (vx0/kv) * (1 - exp(-kv*t))
+        vx(t) = vx0 * exp(-kv*t)
+    For z-dynamics:
+        vz(t) = (vz0 + g/kv)*exp(-kv*t) - g/kv
+        z(t) = z0 + (vz0 + g/kv)/kv * (1 - exp(-kv*t)) - g*t/kv
+    """
+    x0, z0, vx0, vz0 = state
+    x = x0 + (vx0 / kv) * (1 - np.exp(-kv*t))
+    vx = vx0 * np.exp(-kv*t)
+    vz = (vz0 + g/kv) * np.exp(-kv*t) - g/kv
+    z = z0 + ((vz0 + g/kv)/kv) * (1 - np.exp(-kv*t)) - (g*t)/kv
+    return np.array([x, z, vx, vz])
+
+def time_to_target(x0, vx0, target, kv):
+    """
+    Compute the time required for the x component to reach 'target' given:
+    x(t) = x0 + (vx0/kv)*(1 - exp(-kv*t))
+    Solving:
+        t = -1/kv * ln(1 - (kv*(target - x0))/vx0)
+    """
+    arg = 1 - (kv * (target - x0)) / vx0
+    if arg <= 0:
+        return None
+    return -np.log(arg) / kv
+
+# ===================================================================
 # Section: Pygame Projection Initialization
 # ===================================================================
 
@@ -119,72 +185,6 @@ if sys.stdin in rlist:
     line = sys.stdin.readline()
     if line.strip().lower() == "start" or line.strip() == "":
         send_start_command(ports)
-
-# ===================================================================
-# Section: Prediction Functions
-# ===================================================================
-
-# Define the state transition function (2D kinematics with kv drag)
-def fx(state, dt):
-    """
-    State transition function for 2D projectile motion with kv drag.
-    State: [x, z, vx, vz]
-    """
-    x, z, vx, vz, Y = state
-    
-    kv = 0.67  # Linear drag coefficient
-    g = 9.81   # Gravity (acts in -z direction)
-    
-    # Compute acceleration
-    ax = -kv * vx
-    az = -kv * vz - g  # Include gravity
-    
-    # Update velocity (Euler integration)
-    vx_new = vx + ax * dt
-    vz_new = vz + az * dt
-    
-    # Update position
-    x_new = x + vx * dt
-    z_new = z + vz * dt
-    Y_new = Y
-    return np.array([x_new, z_new, vx_new, vz_new, Y_new])
-
-# Measurement function: maps (x, z) to pixel coordinates (u, v)
-def hx(state):
-    x, z, vx, vz, Y = state
-    u = cx + (f * x) / Y
-    v = cy + (f * z) / Y
-    return np.array([u, v])
-
-# Analytical propagation for x(t) and z(t)
-def propagate_state_analytical(state, t, kv=0.67, g=9.81):
-    """
-    Propagate the state analytically over time t.
-    For x-dynamics:
-        x(t) = x0 + (vx0/kv) * (1 - exp(-kv*t))
-        vx(t) = vx0 * exp(-kv*t)
-    For z-dynamics:
-        vz(t) = (vz0 + g/kv)*exp(-kv*t) - g/kv
-        z(t) = z0 + (vz0 + g/kv)/kv * (1 - exp(-kv*t)) - g*t/kv
-    """
-    x0, z0, vx0, vz0 = state
-    x = x0 + (vx0 / kv) * (1 - np.exp(-kv*t))
-    vx = vx0 * np.exp(-kv*t)
-    vz = (vz0 + g/kv) * np.exp(-kv*t) - g/kv
-    z = z0 + ((vz0 + g/kv)/kv) * (1 - np.exp(-kv*t)) - (g*t)/kv
-    return np.array([x, z, vx, vz])
-
-def time_to_target(x0, vx0, target, kv):
-    """
-    Compute the time required for the x component to reach 'target' given:
-    x(t) = x0 + (vx0/kv)*(1 - exp(-kv*t))
-    Solving:
-        t = -1/kv * ln(1 - (kv*(target - x0))/vx0)
-    """
-    arg = 1 - (kv * (target - x0)) / vx0
-    if arg <= 0:
-        return None
-    return -np.log(arg) / kv
 
 # ===================================================================
 # Section: Projection Functions
