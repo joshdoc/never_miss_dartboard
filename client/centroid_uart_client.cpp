@@ -85,7 +85,7 @@ int main() {
     // GStreamer pipeline configuration
     const std::string pipeline =
         "libcamerasrc ! "
-        "video/x-raw,width=640,height=480,format=NV12 ! "
+        "video/x-raw,width=1280,height=720,format=NV12 ! "
         "videoconvert ! "
         "video/x-raw,format=BGR ! "
         "appsink drop=1";
@@ -100,10 +100,10 @@ int main() {
 
     // Parameters for image processing
     float scale_factor = 0.4f;  // Downsample factor
-    int threshold_value = 50;   // Adjust based on your needs
+    int threshold_value = 32;   // Adjust based on your needs
     Mat kernel = getStructuringElement(MORPH_RECT, Size(9,9));
 
-    namedWindow("Binary Feed", WINDOW_NORMAL);
+    // namedWindow("Binary Feed", WINDOW_NORMAL);
 
     // Record the start time for timestamp calculations
     auto startTime = steady_clock::now();
@@ -158,15 +158,15 @@ int main() {
         }
 
         // Display binary image
-        imshow("Binary Feed", binary);
+        // imshow("Binary Feed", binary);
 
-        if (waitKey(1) == 27)  // ESC to exit
-            break;
+        // if (waitKey(1) == 27)  // ESC to exit
+        //     break;
     }
 
     // Cleanup
     cap.release();
-    destroyAllWindows();
+    // destroyAllWindows();
     close(uart_fd);
     return 0;
 }
