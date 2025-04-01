@@ -1,76 +1,80 @@
 #include <opencv2/opencv.hpp>
-#include <chrono>
 #include <iostream>
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
 #include <cstdint>
 
+// Uncomment the following line to enable debug output
+//#define DEBUG
+
 using namespace cv;
 using namespace std;
-using namespace std::chrono;
 
-// Function to configure and open the serial port on AMA0
+// Opens and configures the provided UART serial port for transmission only
 int configurePort(const char* port, speed_t baudRate = B115200) {
-    int fd = open(port, O_RDWR | O_NOCTTY | O_SYNC);
+    // Open for write-only, since we are only transmitting
+    int fd = open(port, O_WRONLY | O_NOCTTY | O_SYNC);
     if (fd < 0) {
+        #ifdef DEBUG
         cerr << "Error opening " << port << endl;
+        #endif
         return -1;
     }
 
     struct termios tty;
     if (tcgetattr(fd, &tty) != 0) {
+        #ifdef DEBUG
         cerr << "Error from tcgetattr" << endl;
+        #endif
         close(fd);
         return -1;
     }
 
     cfsetospeed(&tty, baudRate);
-    cfsetispeed(&tty, baudRate);
 
-    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;    // 8-bit chars
-    tty.c_iflag &= ~IGNBRK;         // disable break processing
-    tty.c_lflag = 0;                // no signaling chars, no echo,
-                                    // no canonical processing
-    tty.c_oflag = 0;                // no remapping, no delays
-    tty.c_cc[VMIN]  = 0;            // read doesn't block
-    tty.c_cc[VTIME] = 5;            // 0.5 seconds read timeout
+    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;  // 8-bit characters
+    tty.c_iflag = 0;                             // disable input processing (not needed for TX)
+    tty.c_oflag = 0;                             // no remapping, no delays
+    tty.c_lflag = 0;                             // no signaling chars, no echo, no canonical processing
 
-    tty.c_iflag &= ~(IXON | IXOFF | IXANY); // shut off xon/xoff ctrl
+    tty.c_cc[VMIN]  = 0;
+    tty.c_cc[VTIME] = 0;
 
-    tty.c_cflag |= (CLOCAL | CREAD);// ignore modem controls,
-                                    // enable reading
-    tty.c_cflag &= ~(PARENB | PARODD);      // shut off parity
+    tty.c_cflag |= CLOCAL;                       // ignore modem controls
+    tty.c_cflag &= ~(PARENB | PARODD);           // shut off parity
     tty.c_cflag &= ~CSTOPB;
-    tty.c_cflag &= ~CRTSCTS;
+    tty.c_cflag &= ~CRTSCTS;                     // no hardware flow control
 
     if (tcsetattr(fd, TCSANOW, &tty) != 0) {
+        #ifdef DEBUG
         cerr << "Error from tcsetattr" << endl;
+        #endif
         close(fd);
         return -1;
     }
+
     return fd;
 }
 
-// Function to send a 6-byte message over UART
-// Message layout: [timestamp (2 bytes), centroid.x (2 bytes), centroid.y (2 bytes)]
-void sendMessage(int fd, uint16_t timestamp, uint16_t cx, uint16_t cy) {
-    unsigned char msg[6];
-    // Pack values in little-endian order
-    msg[0] = timestamp & 0xFF;
-    msg[1] = (timestamp >> 8) & 0xFF;
-    msg[2] = cx & 0xFF;
-    msg[3] = (cx >> 8) & 0xFF;
-    msg[4] = cy & 0xFF;
-    msg[5] = (cy >> 8) & 0xFF;
+// Function to send a 4-byte message over UART
+// Message layout: [centroid.x (2 bytes), centroid.y (2 bytes)]
+void sendMessage(int fd, uint16_t cx, uint16_t cy) {
+    unsigned char msg[4];
+    // Pack the centroid values in little-endian order
+    msg[0] = cx & 0xFF;
+    msg[1] = (cx >> 8) & 0xFF;
+    msg[2] = cy & 0xFF;
+    msg[3] = (cy >> 8) & 0xFF;
 
     ssize_t bytesWritten = write(fd, msg, sizeof(msg));
+    #ifdef DEBUG
     if (bytesWritten != sizeof(msg)) {
         cerr << "Error writing to UART" << endl;
     } else {
-        cout << "Transmitted: ts=" << timestamp
-             << ", cx=" << cx << ", cy=" << cy << endl;
+        cout << "Transmitted: cx=" << cx << ", cy=" << cy << endl;
     }
+    #endif
 }
 
 int main() {
@@ -82,7 +86,6 @@ int main() {
     }
 
     // ---------------------- Camera Capture Initialization ----------------------
-    // GStreamer pipeline configuration
     const std::string pipeline =
         "libcamerasrc ! "
         "video/x-raw,width=1280,height=720,format=NV12 ! "
@@ -90,10 +93,11 @@ int main() {
         "video/x-raw,format=BGR ! "
         "appsink drop=1";
 
-    // Initialize camera (replace with your camera setup)
     VideoCapture cap(pipeline, CAP_GSTREAMER);
     if (!cap.isOpened()) {
+        #ifdef DEBUG
         cerr << "Error opening camera!" << endl;
+        #endif
         close(uart_fd);
         return -1;
     }
@@ -103,24 +107,19 @@ int main() {
     int threshold_value = 32;   // Adjust based on your needs
     Mat kernel = getStructuringElement(MORPH_RECT, Size(9,9));
 
-    // namedWindow("Binary Feed", WINDOW_NORMAL);
-
-    // Record the start time for timestamp calculations
-    auto startTime = steady_clock::now();
-
     while (true) {
         Mat frame;
         cap >> frame;
         if (frame.empty())
             break;
 
-        // Processing pipeline: convert to grayscale and downsample
+        // Processing pipeline: convert to grayscale, downsample, and blur
         Mat gray, binary;
         cvtColor(frame, gray, COLOR_BGR2GRAY);
         resize(gray, gray, Size(), scale_factor, scale_factor, INTER_NEAREST);
         GaussianBlur(gray, gray, Size(3, 3), 0);
 
-        // Top-hat transform
+        // Top-hat transform to emphasize features
         Mat eroded, dilated, top_hat;
         erode(gray, eroded, kernel);
         dilate(eroded, dilated, kernel);
@@ -136,37 +135,26 @@ int main() {
         Point centroid(-1, -1);
         if (!contours.empty()) {
             auto max_it = max_element(contours.begin(), contours.end(),
-                                      [](const vector<Point>& a, const vector<Point>& b) {
-                                          return contourArea(a) < contourArea(b);
-                                      });
-
+                [](const vector<Point>& a, const vector<Point>& b) {
+                    return contourArea(a) < contourArea(b);
+                });
             Moments M = moments(*max_it);
             if (M.m00 != 0) {
                 // Scale back the centroid to original resolution
                 centroid.x = static_cast<int>(M.m10 / M.m00 / scale_factor);
                 centroid.y = static_cast<int>(M.m01 / M.m00 / scale_factor);
+                #ifdef DEBUG
                 cout << "Centroid detected at: (" << centroid.x
                      << ", " << centroid.y << ")" << endl;
-
-                // Calculate elapsed time in milliseconds (wrap to 16-bit)
-                auto now = steady_clock::now();
-                uint16_t timestamp = static_cast<uint16_t>(duration_cast<milliseconds>(now - startTime).count() & 0xFFFF);
-                // Transmit the message over UART
-                sendMessage(uart_fd, timestamp, static_cast<uint16_t>(centroid.x),
-                            static_cast<uint16_t>(centroid.y));
+                #endif
+                // Transmit the centroid values over UART
+                sendMessage(uart_fd, static_cast<uint16_t>(centroid.x), static_cast<uint16_t>(centroid.y));
             }
         }
-
-        // Display binary image
-        // imshow("Binary Feed", binary);
-
-        // if (waitKey(1) == 27)  // ESC to exit
-        //     break;
     }
 
     // Cleanup
     cap.release();
-    // destroyAllWindows();
     close(uart_fd);
     return 0;
 }

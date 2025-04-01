@@ -20,21 +20,25 @@ def configure_port(port, baudrate=115200, timeout=1):
         print(f"Error opening {port}: {e}")
         return None
 
-def send_start_command(ser_list):
-    start_cmd = "START\n".encode('ascii')
-    for ser in ser_list:
-        try:
-            ser.write(start_cmd)
-            print(f"Sent start command on {ser.port}")
-        except Exception as e:
-            print(f"Error sending start command on {ser.port}: {e}")
+def receive_packet(ser):
+    """
+    Attempts to read a 4-byte packet from the serial port.
+    Returns a tuple: (reception_timestamp, centroid_x, centroid_y)
+    If a full packet is not available, returns None.
+    """
+    data = ser.read(4)
+    if len(data) == 4:
+        reception_time = time.time()  # Timestamp of reception in seconds
+        centroid_x = int.from_bytes(data[0:2], byteorder='little')
+        centroid_y = int.from_bytes(data[2:4], byteorder='little')
+        return reception_time, centroid_x, centroid_y
+    return None
 
 # ===================================================================
 # Section: Main
 # ===================================================================
 
 def main():
-
     # Opens & Configures UART Ports
     port0 = "/dev/ttyAMA0"  # Camera 1
     port2 = "/dev/ttyAMA2"  # Camera 2
@@ -46,33 +50,23 @@ def main():
         print("Failed to open one or more UART ports.")
         sys.exit(1)
     
-    # Wait for user input to send start command
-    ports = [ser0, ser2]
-    print("Press ENTER to send start capture command to cameras...")
-    rlist, _, _ = select.select([sys.stdin], [], [])
-    if sys.stdin in rlist:
-        line = sys.stdin.readline()
-        if line.strip().lower() == "start" or line.strip() == "":
-            send_start_command(ports)
+    print("Listening for incoming UART transmissions...")
     
     # Loop to process incoming UART transmissions
     while True:
+        # Monitor both serial ports
         rlist, _, _ = select.select([ser0.fileno(), ser2.fileno()], [], [])
         for fd in rlist:
             if fd == ser0.fileno():
-                data = ser0.read(6)
-                if len(data) == 6:
-                    t = int.from_bytes(data[0:2], byteorder='little')
-                    c1 = int.from_bytes(data[2:4], byteorder='little')
-                    c2 = int.from_bytes(data[4:6], byteorder='little')
-                    print(f"Received on {ser0.port} (Client 1): time={t} ms, centroid1={c1}, centroid2={c2}")
+                packet = receive_packet(ser0)
+                if packet:
+                    rec_time, cx, cy = packet
+                    print(f"Received on {ser0.port} (Client 1): time={rec_time:.3f} s, centroid=({cx}, {cy})")
             if fd == ser2.fileno():
-                data = ser2.read(6)
-                if len(data) == 6:
-                    t = int.from_bytes(data[0:2], byteorder='little')
-                    c1 = int.from_bytes(data[2:4], byteorder='little')
-                    c2 = int.from_bytes(data[4:6], byteorder='little')
-                    print(f"Received on {ser2.port} (Client 2): time={t} ms, centroid1={c1}, centroid2={c2}")
+                packet = receive_packet(ser2)
+                if packet:
+                    rec_time, cx, cy = packet
+                    print(f"Received on {ser2.port} (Client 2): time={rec_time:.3f} s, centroid=({cx}, {cy})")
 
 if __name__ == "__main__":
     main()
