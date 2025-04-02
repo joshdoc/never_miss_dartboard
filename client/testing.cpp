@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <chrono>
 
-define DEBUG  // Uncomment this line to enable debug output
+#define DEBUG  // Uncomment this line to enable debug output
 
 using namespace cv;
 using namespace std;
@@ -147,15 +147,14 @@ int main() {
                 bestMoments = moments(contour);
             }
         }
-
+        auto centroids = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
+        start = high_resolution_clock::now();
         if (bestMoments.m00 != 0) {
             centroid.x = static_cast<int>(bestMoments.m10 / bestMoments.m00 / scale_factor);
             centroid.y = static_cast<int>(bestMoments.m01 / bestMoments.m00 / scale_factor);
-            auto centroids = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
-            start = high_resolution_clock::now();
             sendMessage(uart_fd, static_cast<uint16_t>(centroid.x), static_cast<uint16_t>(centroid.y));
-            auto uart = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
         }
+        auto uart = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
         auto frameEnd = high_resolution_clock::now();
         auto frameTime = duration_cast<microseconds>(frameEnd - frameStart).count();
