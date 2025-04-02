@@ -135,6 +135,7 @@ int main() {
         findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
         auto contoursTime = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
+        start = high_resolution_clock::now();
         double maxArea = 0;
         Point centroid(-1, -1);
         Moments bestMoments;
@@ -150,8 +151,10 @@ int main() {
         if (bestMoments.m00 != 0) {
             centroid.x = static_cast<int>(bestMoments.m10 / bestMoments.m00 / scale_factor);
             centroid.y = static_cast<int>(bestMoments.m01 / bestMoments.m00 / scale_factor);
-
+            auto centroids = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
+            start = high_resolution_clock::now();
             sendMessage(uart_fd, static_cast<uint16_t>(centroid.x), static_cast<uint16_t>(centroid.y));
+            auto uart = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
         }
 
         auto frameEnd = high_resolution_clock::now();
@@ -165,6 +168,8 @@ int main() {
              << ", Top-hat=" << tophatTime
              << ", Threshold=" << thresholdTime
              << ", Contours=" << contoursTime
+             << ", Centroids=" << centroids
+             << ", UART=" << uart
              << ", Total Frame=" << frameTime << endl;
         #endif
     }
