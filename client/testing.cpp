@@ -84,10 +84,10 @@ int main() {
 
     const std::string pipeline =
         "libcamerasrc ! "
-        "video/x-raw,width=1280,height=720,format=NV12 ! "
+        "video/x-raw,width=1280,height=720,format=NV12,framerate=70/1 ! "
         "videoconvert ! "
         "video/x-raw,format=GRAY8 ! "
-        "appsink drop=1";
+        "appsink drop=1 sync=false";
 
     VideoCapture cap(pipeline, CAP_GSTREAMER);
     if (!cap.isOpened()) {
