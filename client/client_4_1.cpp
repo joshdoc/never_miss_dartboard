@@ -90,7 +90,7 @@ int main() {
         "libcamerasrc ! "
         "video/x-raw,width=1280,height=720,format=NV12 ! "
         "videoconvert ! "
-        "video/x-raw,format=BGR ! "
+        "video/x-raw,format=GRAY8 ! "
         "appsink drop=1";
 
     VideoCapture cap(pipeline, CAP_GSTREAMER);
@@ -105,7 +105,13 @@ int main() {
     // Parameters for image processing
     float scale_factor = 0.4f;  // Downsample factor
     int threshold_value = 32;   // Adjust based on your needs
+    Mat frame, binary;
     Mat kernel = getStructuringElement(MORPH_RECT, Size(9,9));
+
+    // For FPS calculation
+    #ifdef DEBUG
+    double prevTick = (double)getTickCount();
+    #endif
 
     while (true) {
         Mat frame;
@@ -113,17 +119,15 @@ int main() {
         if (frame.empty())
             break;
 
-        // Processing pipeline: convert to grayscale, downsample, and blur
-        Mat gray, binary;
-        cvtColor(frame, gray, COLOR_BGR2GRAY);
-        resize(gray, gray, Size(), scale_factor, scale_factor, INTER_NEAREST);
-        GaussianBlur(gray, gray, Size(3, 3), 0);
+        // Processing pipeline: downsample and blur
+        resize(frame, frame, Size(), scale_factor, scale_factor, INTER_NEAREST);
+        GaussianBlur(frame, frame, Size(3, 3), 0);
 
         // Top-hat transform to emphasize features
         Mat eroded, dilated, top_hat;
-        erode(gray, eroded, kernel);
+        erode(frame, eroded, kernel);
         dilate(eroded, dilated, kernel);
-        top_hat = gray - dilated;
+        top_hat = frame - dilated;
 
         threshold(top_hat, binary, threshold_value, 255, THRESH_BINARY);
 
@@ -132,23 +136,33 @@ int main() {
         findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
 
         // Find largest contour and calculate its centroid
+        // Identify largest contour and compute centroid
+        double maxArea = 0;
         Point centroid(-1, -1);
-        if (!contours.empty()) {
-            auto max_it = max_element(contours.begin(), contours.end(),
-                [](const vector<Point>& a, const vector<Point>& b) {
-                    return contourArea(a) < contourArea(b);
-                });
-            Moments M = moments(*max_it);
-            if (M.m00 != 0) {
-                // Scale back the centroid to original resolution
-                centroid.x = static_cast<int>(M.m10 / M.m00 / scale_factor);
-                centroid.y = static_cast<int>(M.m01 / M.m00 / scale_factor);
-                #ifdef DEBUG
-                cout << "Centroid detected at: (" << centroid.x
-                     << ", " << centroid.y << ")" << endl;
-                #endif
-                // Transmit the centroid values over UART
-                sendMessage(uart_fd, static_cast<uint16_t>(centroid.x), static_cast<uint16_t>(centroid.y));
+        Moments bestMoments;
+
+        for (const auto& contour : contours) {
+            double area = contourArea(contour);
+            if (area > maxArea) {
+                maxArea = area;
+                bestMoments = moments(contour);
+            }
+        }
+
+        if (bestMoments.m00 != 0) {
+            centroid.x = static_cast<int>(bestMoments.m10 / bestMoments.m00 / scale_factor);
+            centroid.y = static_cast<int>(bestMoments.m01 / bestMoments.m00 / scale_factor);
+
+            #ifdef DEBUG
+            // FPS and Centroid Printing
+            double currentTick = (double)cv::getTickCount();
+            double fps = cv::getTickFrequency() / (currentTick - prevTick);
+            prevTick = currentTick;  // Update for next frame
+            cout << "FPS: " << fps << endl;
+            cout << "Centroid detected at: (" << centroid.x << ", " << centroid.y << ")" << endl;
+            #endif
+            // Transmit the centroid values over UART
+            sendMessage(uart_fd, static_cast<uint16_t>(centroid.x), static_cast<uint16_t>(centroid.y));
             }
         }
     }
