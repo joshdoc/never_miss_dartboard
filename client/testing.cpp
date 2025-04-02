@@ -4,12 +4,13 @@
 #include <termios.h>
 #include <unistd.h>
 #include <cstdint>
+#include <chrono>
 
-// Uncomment the following line to enable debug output
-//#define DEBUG
+define DEBUG  // Uncomment this line to enable debug output
 
 using namespace cv;
 using namespace std;
+using namespace std::chrono;
 
 // Opens and configures the provided UART serial port for transmission only
 int configurePort(const char* port, speed_t baudRate = B115200) {
@@ -55,18 +56,23 @@ int configurePort(const char* port, speed_t baudRate = B115200) {
 
 // Function to send a 4-byte message over UART
 void sendMessage(int fd, uint16_t cx, uint16_t cy) {
-    unsigned char msg[4];
-    msg[0] = cx & 0xFF;
-    msg[1] = (cx >> 8) & 0xFF;
-    msg[2] = cy & 0xFF;
-    msg[3] = (cy >> 8) & 0xFF;
+    unsigned char msg[4] = {
+        static_cast<unsigned char>(cx & 0xFF),
+        static_cast<unsigned char>((cx >> 8) & 0xFF),
+        static_cast<unsigned char>(cy & 0xFF),
+        static_cast<unsigned char>((cy >> 8) & 0xFF)
+    };
 
+    auto start = high_resolution_clock::now();
     ssize_t bytesWritten = write(fd, msg, sizeof(msg));
+    auto end = high_resolution_clock::now();
+    auto uartTime = duration_cast<microseconds>(end - start).count();
+
     #ifdef DEBUG
     if (bytesWritten != sizeof(msg)) {
         cerr << "Error writing to UART" << endl;
     } else {
-        cout << "Transmitted: cx=" << cx << ", cy=" << cy << endl;
+        cout << "UART Sent: (" << cx << ", " << cy << ") | Time: " << uartTime << " us" << endl;
     }
     #endif
 }
@@ -97,57 +103,37 @@ int main() {
     Mat frame, binary;
     Mat kernel = getStructuringElement(MORPH_RECT, Size(9,9));
 
-    #ifdef DEBUG
-    double prevTick = (double)getTickCount();
-    #endif
-
+    auto prevTime = high_resolution_clock::now();
+    
     while (true) {
-        Mat frame;
+        auto frameStart = high_resolution_clock::now();
         cap >> frame;
         if (frame.empty()) break;
-
-        #ifdef DEBUG
-        double t1 = (double)getTickCount();
-        #endif
-
+        
+        // Timing for each step
+        auto start = high_resolution_clock::now();
         resize(frame, frame, Size(), scale_factor, scale_factor, INTER_NEAREST);
+        auto resizeTime = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
-        #ifdef DEBUG
-        double t2 = (double)getTickCount();
-        cout << "Resize time: " << (t2 - t1) / getTickFrequency() * 1000 << " ms" << endl;
-        #endif
-
+        start = high_resolution_clock::now();
         GaussianBlur(frame, frame, Size(3, 3), 0);
+        auto blurTime = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
-        #ifdef DEBUG
-        double t3 = (double)getTickCount();
-        cout << "GaussianBlur time: " << (t3 - t2) / getTickFrequency() * 1000 << " ms" << endl;
-        #endif
-
+        start = high_resolution_clock::now();
         Mat eroded, dilated, top_hat;
         erode(frame, eroded, kernel);
         dilate(eroded, dilated, kernel);
         top_hat = frame - dilated;
+        auto tophatTime = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
-        #ifdef DEBUG
-        double t4 = (double)getTickCount();
-        cout << "Top-hat transform time: " << (t4 - t3) / getTickFrequency() * 1000 << " ms" << endl;
-        #endif
-
+        start = high_resolution_clock::now();
         threshold(top_hat, binary, threshold_value, 255, THRESH_BINARY);
+        auto thresholdTime = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
-        #ifdef DEBUG
-        double t5 = (double)getTickCount();
-        cout << "Thresholding time: " << (t5 - t4) / getTickFrequency() * 1000 << " ms" << endl;
-        #endif
-
+        start = high_resolution_clock::now();
         vector<vector<Point>> contours;
         findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
-
-        #ifdef DEBUG
-        double t6 = (double)getTickCount();
-        cout << "Contour detection time: " << (t6 - t5) / getTickFrequency() * 1000 << " ms" << endl;
-        #endif
+        auto contoursTime = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
         double maxArea = 0;
         Point centroid(-1, -1);
@@ -165,16 +151,22 @@ int main() {
             centroid.x = static_cast<int>(bestMoments.m10 / bestMoments.m00 / scale_factor);
             centroid.y = static_cast<int>(bestMoments.m01 / bestMoments.m00 / scale_factor);
 
-            #ifdef DEBUG
-            double currentTick = (double)getTickCount();
-            double fps = getTickFrequency() / (currentTick - prevTick);
-            prevTick = currentTick;
-            cout << "FPS: " << fps << endl;
-            cout << "Centroid detected at: (" << centroid.x << ", " << centroid.y << ")" << endl;
-            #endif
-
             sendMessage(uart_fd, static_cast<uint16_t>(centroid.x), static_cast<uint16_t>(centroid.y));
         }
+
+        auto frameEnd = high_resolution_clock::now();
+        auto frameTime = duration_cast<microseconds>(frameEnd - frameStart).count();
+        auto fps = 1e6 / frameTime; // Convert microseconds to FPS
+
+        #ifdef DEBUG
+        cout << "FPS: " << fps << endl;
+        cout << "Timings (us): Resize=" << resizeTime
+             << ", Blur=" << blurTime
+             << ", Top-hat=" << tophatTime
+             << ", Threshold=" << thresholdTime
+             << ", Contours=" << contoursTime
+             << ", Total Frame=" << frameTime << endl;
+        #endif
     }
 
     cap.release();
