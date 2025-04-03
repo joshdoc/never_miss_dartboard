@@ -4,58 +4,35 @@
 #include <termios.h>
 #include <unistd.h>
 #include <cstdint>
-#include <chrono>
 #include <sched.h>
 #include <sys/mman.h>
-#include <sys/resource.h>
+#include <time.h>
 
-#define DEBUG  // Uncomment this line to enable debug output
+#define LOOP_PERIOD_NS 33000000  // ~30 FPS loop period (33ms)
+#define DEBUG
 
 using namespace cv;
 using namespace std;
-using namespace std::chrono;
 
-// Real-time configuration functions
-void configureRealtimeSettings() {
-    // Set highest priority (1-99 for SCHED_FIFO)
+void setupRealtime() {
     struct sched_param param;
-    param.sched_priority = 99;
-    if (sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
-        perror("sched_setscheduler failed");
+    param.sched_priority = sched_get_priority_max(SCHED_FIFO); // Set highest priority
+    if (sched_setscheduler(0, SCHED_FIFO, &param) < 0) {
+        cerr << "Failed to set real-time scheduler" << endl;
     }
-
-    // Lock all current and future memory to prevent paging
-    if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
-        perror("mlockall failed");
+    
+    // Lock memory to prevent paging
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+        cerr << "Failed to lock memory" << endl;
     }
-
-    // Set CPU affinity to a single core (adjust mask as needed)
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(0, &cpuset); // Use core 0
-    if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) == -1) {
-        perror("sched_setaffinity failed");
-    }
-
-    // Disable memory overcommit
-    system("echo 2 > /proc/sys/vm/overcommit_memory");
 }
 
-// Opens and configures the provided UART serial port for transmission only
 int configurePort(const char* port, speed_t baudRate = B115200) {
     int fd = open(port, O_WRONLY | O_NOCTTY | O_SYNC);
-    if (fd < 0) {
-        #ifdef DEBUG
-        cerr << "Error opening " << port << endl;
-        #endif
-        return -1;
-    }
+    if (fd < 0) return -1;
 
     struct termios tty;
     if (tcgetattr(fd, &tty) != 0) {
-        #ifdef DEBUG
-        cerr << "Error from tcgetattr" << endl;
-        #endif
         close(fd);
         return -1;
     }
@@ -68,124 +45,68 @@ int configurePort(const char* port, speed_t baudRate = B115200) {
     tty.c_cc[VMIN]  = 0;
     tty.c_cc[VTIME] = 0;
     tty.c_cflag |= CLOCAL;
-    tty.c_cflag &= ~(PARENB | PARODD);
-    tty.c_cflag &= ~CSTOPB;
-    tty.c_cflag &= ~CRTSCTS;
+    tty.c_cflag &= ~(PARENB | PARODD | CSTOPB | CRTSCTS);
 
     if (tcsetattr(fd, TCSANOW, &tty) != 0) {
-        #ifdef DEBUG
-        cerr << "Error from tcsetattr" << endl;
-        #endif
         close(fd);
         return -1;
     }
-
     return fd;
 }
 
-// Function to send a 4-byte message over UART
 void sendMessage(int fd, uint16_t cx, uint16_t cy) {
-    unsigned char msg[4] = {
-        static_cast<unsigned char>(cx & 0xFF),
-        static_cast<unsigned char>((cx >> 8) & 0xFF),
-        static_cast<unsigned char>(cy & 0xFF),
-        static_cast<unsigned char>((cy >> 8) & 0xFF)
-    };
-
-    auto start = high_resolution_clock::now();
-    ssize_t bytesWritten = write(fd, msg, sizeof(msg));
-    auto end = high_resolution_clock::now();
-    auto uartTime = duration_cast<microseconds>(end - start).count();
-
-    #ifdef DEBUG
-    if (bytesWritten != sizeof(msg)) {
-        cerr << "Error writing to UART" << endl;
-    } else {
-        cout << "UART Sent: (" << cx << ", " << cy << ") | Time: " << uartTime << " us" << endl;
-    }
-    #endif
+    unsigned char msg[4] = { cx & 0xFF, (cx >> 8) & 0xFF, cy & 0xFF, (cy >> 8) & 0xFF };
+    write(fd, msg, sizeof(msg));
 }
 
 int main() {
-    // Configure real-time settings
-    configureRealtimeSettings();
+    setupRealtime();
 
     const char* uartPort = "/dev/ttyAMA0";
     int uart_fd = configurePort(uartPort);
     if (uart_fd < 0) return -1;
 
-    const std::string pipeline =
-        "libcamerasrc ! "
-        "video/x-raw,width=1280,height=720,format=NV12,framerate=70/1 ! "
-        "videoconvert ! "
-        "video/x-raw,format=GRAY8 ! "
-        "appsink drop=1 sync=false";
-
-    // Pre-allocate all OpenCV mats to avoid dynamic allocation during runtime
-    Mat frame, resizedFrame, blurredFrame, eroded, dilated, top_hat, binary;
-    vector<vector<Point>> contours;
-    Moments bestMoments;
-    Point centroid(-1, -1);
-    
-    // Initialize with expected sizes
-    const Size targetSize(1280 * 0.4, 720 * 0.4);
-    resizedFrame.create(targetSize, CV_8UC1);
-    blurredFrame.create(targetSize, CV_8UC1);
-    eroded.create(targetSize, CV_8UC1);
-    dilated.create(targetSize, CV_8UC1);
-    top_hat.create(targetSize, CV_8UC1);
-    binary.create(targetSize, CV_8UC1);
-
+    const std::string pipeline = "libcamerasrc ! video/x-raw,width=1280,height=720,format=NV12 ! videoconvert ! video/x-raw,format=GRAY8 ! appsink drop=1";
     VideoCapture cap(pipeline, CAP_GSTREAMER);
     if (!cap.isOpened()) {
-        #ifdef DEBUG
-        cerr << "Error opening camera!" << endl;
-        #endif
         close(uart_fd);
         return -1;
     }
 
-    const float scale_factor = 0.4f;
-    const int threshold_value = 32;
-    Mat kernel = getStructuringElement(MORPH_RECT, Size(9,9));
-
-    // Timing control variables
-    microseconds targetFrameTime(14285); // ~70 FPS (1,000,000 us / 70)
-    auto prevFrameStart = high_resolution_clock::now();
+    float scale_factor = 0.4f;
+    int threshold_value = 32;
+    Mat frame, binary, kernel = getStructuringElement(MORPH_RECT, Size(9,9));
     
+    struct timespec next_time, start_time, end_time;
+    clock_gettime(CLOCK_MONOTONIC, &next_time);
+
     while (true) {
-        auto frameStart = high_resolution_clock::now();
-        
-        // Capture frame
-        if (!cap.read(frame)) break;
-        
-        // Processing pipeline with enforced timing
-        auto start = high_resolution_clock::now();
-        resize(frame, resizedFrame, Size(), scale_factor, scale_factor, INTER_NEAREST);
-        auto resizeTime = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
+        clock_gettime(CLOCK_MONOTONIC, &start_time);
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_time, nullptr);
+        next_time.tv_nsec += LOOP_PERIOD_NS;
+        if (next_time.tv_nsec >= 1000000000) {
+            next_time.tv_nsec -= 1000000000;
+            next_time.tv_sec++;
+        }
 
-        start = high_resolution_clock::now();
-        GaussianBlur(resizedFrame, blurredFrame, Size(3, 3), 0);
-        auto blurTime = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
+        cap >> frame;
+        if (frame.empty()) break;
 
-        start = high_resolution_clock::now();
-        erode(blurredFrame, eroded, kernel);
+        resize(frame, frame, Size(), scale_factor, scale_factor, INTER_NEAREST);
+        GaussianBlur(frame, frame, Size(3, 3), 0);
+
+        Mat eroded, dilated, top_hat;
+        erode(frame, eroded, kernel);
         dilate(eroded, dilated, kernel);
-        subtract(blurredFrame, dilated, top_hat);
-        auto tophatTime = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
+        top_hat = frame - dilated;
 
-        start = high_resolution_clock::now();
         threshold(top_hat, binary, threshold_value, 255, THRESH_BINARY);
-        auto thresholdTime = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
-
-        start = high_resolution_clock::now();
+        vector<vector<Point>> contours;
         findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
-        auto contoursTime = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
-        start = high_resolution_clock::now();
         double maxArea = 0;
-        bestMoments = Moments();
-        centroid = Point(-1, -1);
+        Point centroid(-1, -1);
+        Moments bestMoments;
 
         for (const auto& contour : contours) {
             double area = contourArea(contour);
@@ -194,39 +115,19 @@ int main() {
                 bestMoments = moments(contour);
             }
         }
-        auto centroidsTime = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 
         if (bestMoments.m00 != 0) {
             centroid.x = static_cast<int>(bestMoments.m10 / bestMoments.m00 / scale_factor);
             centroid.y = static_cast<int>(bestMoments.m01 / bestMoments.m00 / scale_factor);
-            
-            start = high_resolution_clock::now();
             sendMessage(uart_fd, static_cast<uint16_t>(centroid.x), static_cast<uint16_t>(centroid.y));
-            auto uartTime = duration_cast<microseconds>(high_resolution_clock::now() - start).count();
         }
 
-        auto frameEnd = high_resolution_clock::now();
-        auto frameTime = duration_cast<microseconds>(frameEnd - frameStart);
-        auto remainingTime = targetFrameTime - frameTime;
-
-        // Sleep if we finished early to maintain consistent frame rate
-        if (remainingTime.count() > 0) {
-            this_thread::sleep_for(remainingTime);
-        }
-
+        clock_gettime(CLOCK_MONOTONIC, &end_time);
         #ifdef DEBUG
-        auto actualFrameTime = duration_cast<microseconds>(high_resolution_clock::now() - frameStart).count();
-        cout << "FPS: " << 1e6/actualFrameTime << endl;
-        cout << "Timings (us): Resize=" << resizeTime
-             << ", Blur=" << blurTime
-             << ", Top-hat=" << tophatTime
-             << ", Threshold=" << thresholdTime
-             << ", Contours=" << contoursTime
-             << ", Centroids=" << centroidsTime
-             << ", Total Frame=" << actualFrameTime << endl;
+        double elapsed_time = (end_time.tv_sec - start_time.tv_sec) * 1000.0 + (end_time.tv_nsec - start_time.tv_nsec) / 1000000.0;
+        cout << "Loop Execution Time: " << elapsed_time << " ms" << endl;
         #endif
     }
-
     cap.release();
     close(uart_fd);
     return 0;
