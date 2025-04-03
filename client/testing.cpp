@@ -1,3 +1,7 @@
+// g++ -O3 -march=native -funroll-loops -o outputfilename filename.cpp $(pkg-config --cflags --libs opencv4 gstreamer-1.0) -lpthread -lrt
+// sudo ./outputfilename
+
+
 #include <opencv2/opencv.hpp>
 #include <iostream>
 #include <fcntl.h>
