@@ -8,7 +8,7 @@
 #include <sys/mman.h>
 #include <time.h>
 
-#define LOOP_PERIOD_NS 16666667  // ~60 FPS loop period
+#define LOOP_PERIOD_NS 16666667  // ~60 FPS loop period (16.67ms)
 #define DEBUG
 
 using namespace cv;
@@ -92,6 +92,9 @@ int main() {
         cap >> frame;
         if (frame.empty()) break;
 
+        struct timespec process_start, process_end;
+        clock_gettime(CLOCK_MONOTONIC, &process_start);
+
         resize(frame, frame, Size(), scale_factor, scale_factor, INTER_NEAREST);
         GaussianBlur(frame, frame, Size(3, 3), 0);
 
@@ -122,10 +125,12 @@ int main() {
             sendMessage(uart_fd, static_cast<uint16_t>(centroid.x), static_cast<uint16_t>(centroid.y));
         }
 
-        clock_gettime(CLOCK_MONOTONIC, &end_time);
+        clock_gettime(CLOCK_MONOTONIC, &process_end);
         #ifdef DEBUG
-        double elapsed_time = (end_time.tv_sec - start_time.tv_sec) * 1000.0 + (end_time.tv_nsec - start_time.tv_nsec) / 1000000.0;
-        cout << "Loop Execution Time: " << elapsed_time << " ms" << endl;
+        double processing_time = (process_end.tv_sec - process_start.tv_sec) * 1000.0 + (process_end.tv_nsec - process_start.tv_nsec) / 1000000.0;
+        double total_time = (process_end.tv_sec - start_time.tv_sec) * 1000.0 + (process_end.tv_nsec - start_time.tv_nsec) / 1000000.0;
+        cout << "Processing Time: " << processing_time << " ms" << endl;
+        cout << "Total Loop Execution Time: " << total_time << " ms" << endl;
         #endif
     }
     cap.release();
