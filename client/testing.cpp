@@ -12,7 +12,7 @@
 #include <sys/mman.h>
 #include <time.h>
 
-#define LOOP_PERIOD_NS 16666667  // ~60 FPS loop period (16.67ms)
+#define LOOP_PERIOD_NS 22000000  // ~45 FPS loop period (22 ms)
 #define DEBUG
 
 using namespace cv;
