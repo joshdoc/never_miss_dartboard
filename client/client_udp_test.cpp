@@ -76,7 +76,7 @@ int main() {
     struct timespec next_time, start_time, end_time;
     clock_gettime(CLOCK_MONOTONIC, &next_time);
 
-    while (true) {
+        while (true) {
         clock_gettime(CLOCK_MONOTONIC, &start_time);
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_time, nullptr);
         next_time.tv_nsec += LOOP_PERIOD_NS;
@@ -85,24 +85,47 @@ int main() {
             next_time.tv_sec++;
         }
 
+        struct timespec t1, t2;
+
+        // Frame capture
+        clock_gettime(CLOCK_MONOTONIC, &t1);
         cap >> frame;
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        double cap_time = (t2.tv_nsec - t1.tv_nsec) / 1e6 + (t2.tv_sec - t1.tv_sec) * 1000;
+
         if (frame.empty()) break;
 
-        struct timespec process_start, process_end;
-        clock_gettime(CLOCK_MONOTONIC, &process_start);
-
+        // Resize
+        clock_gettime(CLOCK_MONOTONIC, &t1);
         resize(frame, frame, Size(), scale_factor, scale_factor, INTER_NEAREST);
-        GaussianBlur(frame, frame, Size(3, 3), 0);
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        double resize_time = (t2.tv_nsec - t1.tv_nsec) / 1e6 + (t2.tv_sec - t1.tv_sec) * 1000;
 
+        // Gaussian Blur
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        GaussianBlur(frame, frame, Size(3, 3), 0);
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        double blur_time = (t2.tv_nsec - t1.tv_nsec) / 1e6 + (t2.tv_sec - t1.tv_sec) * 1000;
+
+        // Top-hat (Erode -> Dilate -> Subtract)
+        clock_gettime(CLOCK_MONOTONIC, &t1);
         Mat eroded, dilated, top_hat;
         erode(frame, eroded, kernel);
         dilate(eroded, dilated, kernel);
         top_hat = frame - dilated;
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        double tophat_time = (t2.tv_nsec - t1.tv_nsec) / 1e6 + (t2.tv_sec - t1.tv_sec) * 1000;
 
+        // Thresholding + Contour detection
+        clock_gettime(CLOCK_MONOTONIC, &t1);
         threshold(top_hat, binary, threshold_value, 255, THRESH_BINARY);
         vector<vector<Point>> contours;
         findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        double thresh_contour_time = (t2.tv_nsec - t1.tv_nsec) / 1e6 + (t2.tv_sec - t1.tv_sec) * 1000;
 
+        // Centroid calc + UDP send
+        clock_gettime(CLOCK_MONOTONIC, &t1);
         double maxArea = 0;
         Point centroid(-1, -1);
         Moments bestMoments;
@@ -120,13 +143,18 @@ int main() {
             centroid.y = static_cast<int>(bestMoments.m01 / bestMoments.m00 / scale_factor);
             sendMessage(udp_sock, dest_addr, static_cast<uint16_t>(centroid.x), static_cast<uint16_t>(centroid.y));
         }
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        double centroid_udp_time = (t2.tv_nsec - t1.tv_nsec) / 1e6 + (t2.tv_sec - t1.tv_sec) * 1000;
 
-        clock_gettime(CLOCK_MONOTONIC, &process_end);
         #ifdef DEBUG
-        double processing_time = (process_end.tv_sec - process_start.tv_sec) * 1000.0 + (process_end.tv_nsec - process_start.tv_nsec) / 1000000.0;
-        double total_time = (process_end.tv_sec - start_time.tv_sec) * 1000.0 + (process_end.tv_nsec - start_time.tv_nsec) / 1000000.0;
-        cout << "Processing Time: " << processing_time << " ms" << endl;
-        cout << "Total Loop Execution Time: " << total_time << " ms" << endl;
+        cout << fixed;
+        cout << "Capture Time: " << cap_time << " ms" << endl;
+        cout << "Resize Time: " << resize_time << " ms" << endl;
+        cout << "Gaussian Blur Time: " << blur_time << " ms" << endl;
+        cout << "Top-Hat Time: " << tophat_time << " ms" << endl;
+        cout << "Threshold + Contour Time: " << thresh_contour_time << " ms" << endl;
+        cout << "Centroid + UDP Send Time: " << centroid_udp_time << " ms" << endl;
+        cout << "----------------------------------------" << endl;
         #endif
     }
 
