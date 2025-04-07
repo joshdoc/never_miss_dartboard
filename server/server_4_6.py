@@ -202,7 +202,8 @@ def main():
     try:
         while True:
             result = receive_centroid(sock)
-            start = time.perf_counter()
+            if first_meas:
+                start = time.perf_counter()
             if result:
                 pi_id, cx, cy, ts = result
 
