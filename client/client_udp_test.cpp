@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
 
     if (argc > 2) {
         int parsed_id = atoi(argv[2]);
-        if (parsed_id >= 0 && parsed_id <= 255) {
+        if (parsed_id >= 1 && parsed_id <= 2) {
             PI_ID = static_cast<uint8_t>(parsed_id);
         } else {
             cerr << "Invalid PI_ID. Must be 1 or 2." << endl;
