@@ -225,12 +225,12 @@ def main():
                     ukf.update(np.array(cx,cy),R=R_meas,hx=hx_floor)
                 elif pi_id == 1:
                     ukf.update(np.array(cx,cy),R=R_meas,hx=hx_side)
-            if time.perf_counter() - start > 0.2:
+            if time.perf_counter() - start > 0.165:
                 break
             time.sleep(0.003)  # small sleep to reduce CPU usage
     
         # target x
-        target_x = -2.5
+        target_x = -1.99
 
         predicted_state, t_target = predict_state_at_target(ukf.x, target_x, kv=0.67, g=9.81)
         if predicted_state is not None:
