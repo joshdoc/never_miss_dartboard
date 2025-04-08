@@ -125,7 +125,7 @@ points = MerweScaledSigmaPoints(n=dim_x, alpha=0.1, beta=2.0, kappa=0)
 # Initialize UKF using a default measurement function (we will switch based on camera)
 ukf = UnscentedKalmanFilter(dim_x=dim_x, dim_z=dim_z, dt=0.02, fx=fx, hx=hx_floor, points=points)
 # Set an initial state guess (modify as needed)
-ukf.x = np.array([0.0, 0.0, 1.8, 9.0, 0.0, 0.0])
+ukf.x = np.array([0.8, 0.0, 1.8, 9.0, 0.0, 0.0])
 ukf.P = np.eye(dim_x) * 1.0
 ukf.Q = np.eye(dim_x) * 0.5
 ukf.Q[1][1] = 0.05
@@ -199,62 +199,62 @@ def predict_state_at_target(initial_state, target_x, kv=0.67, g=9.81):
 ############################# Main Loop ###################################
 def main():
     sock = setup_socket()
-    # Buffer arrays for received data
     centroid_buffer = []
     camera_buffer = []
     timestamp_buffer = []
     
-    # Use perf_counter to mark the start
-    start = time.perf_counter()
-    
-    # Use a persistent prev_time variable (initialize after first valid measurement)
-    prev_time_buffer = None
-    
+    # Timer will start after the first centroid is received.
+    start = None
+
     try:
         while True:
             result = receive_centroid(sock)
             if result:
                 pi_id, cx, cy, ts_full = result
+
+                # Print the received data immediately.
+                print(f"[{ts_full}] Pi {pi_id} -> centroid_x = {cx}, centroid_y = {cy}")
+
                 # Extract the seconds part from the timestamp (assumes format "20:19:11.365504")
                 parts = ts_full.split(":")
-                # This extracts the seconds + microseconds part, e.g., "11.365504"
+                # Use the seconds component (with microseconds) as a float.
                 ts_val = float(parts[2])
                 centroid_buffer.append([cx, cy])
                 camera_buffer.append(pi_id)
                 timestamp_buffer.append(ts_val)
                 
-            # Collect data for a period (e.g., 0.265 s)
-            if time.perf_counter() - start > 0.175:
+                # Start the timer on receiving the first measurement.
+                if start is None:
+                    start = time.perf_counter()
+            
+            # If the timer has started, check if we've collected data for at least 0.265 s.
+            if start is not None and time.perf_counter() - start > 0.265:
                 break
-            time.sleep(0.001)  # small sleep to reduce CPU load
+            
+            time.sleep(0.003)  # small sleep to reduce CPU usage
     
     except KeyboardInterrupt:
         print("Main loop terminated.")
     finally:
         sock.close()
     
-    # If no data was received, exit.
-    if not timestamp_buffer:
+    if len(timestamp_buffer) == 0:
         print("No centroids received.")
         return
     
-    # Ensure the buffers are NumPy arrays
-    timestamp_buffer = np.array(timestamp_buffer)
-    
-    # Process the buffered data with the UKF
-    # Use the first timestamp as the reference.
+    # Process the buffered data with the UKF.
+    # Initialize the previous time to the first buffered time.
     prev_time = timestamp_buffer[0]
     for i in range(len(timestamp_buffer)):
         current_time = timestamp_buffer[i]
         dt = current_time - prev_time if i > 0 else 0.0
         prev_time = current_time
         
-        # UKF prediction
+        # Perform UKF prediction.
         ukf.predict(dt)
-        # Ensure covariance is symmetric and add jitter for numerical stability.
         ukf.P = (ukf.P + ukf.P.T) / 2 + np.eye(dim_x) * 1e-6
         
-        # Choose measurement function based on the camera id
+        # Use the appropriate measurement function based on the camera id.
         meas = np.array(centroid_buffer[i])
         if camera_buffer[i] == 2:
             ukf.update(meas, R=R_meas, hx=hx_floor)
@@ -263,8 +263,8 @@ def main():
         
         ukf.P = (ukf.P + ukf.P.T) / 2 + np.eye(dim_x) * 1e-6
         
-    # After processing the buffered data, make a prediction:
-    target_x = -1.98  # desired x position (in meters)
+    # After processing all buffered data, make a prediction.
+    target_x = -1.99  # desired x position (in meters)
     predicted_state, t_target = predict_state_at_target(ukf.x, target_x, kv=0.67, g=9.81)
     if predicted_state is not None:
         print("Time to reach x = {:.2f} m: {:.4f} s".format(target_x, t_target))
@@ -275,7 +275,7 @@ def main():
             predicted_state[4], predicted_state[5]))
     else:
         print("Prediction failed.")
-    
+
 if __name__ == "__main__":
     main()
 
