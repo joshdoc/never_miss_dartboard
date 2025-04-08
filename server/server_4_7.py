@@ -97,7 +97,7 @@ R_meas = np.array([[9.0, 0],
 # Dynamics
 # ------------------------------------------------------------
 g = 9.81   # gravitational acceleration
-kv = 0.50   # drag coefficient 
+kv = 0.30   # drag coefficient 
 
 def fx(state, dt):
     """
@@ -125,12 +125,12 @@ points = MerweScaledSigmaPoints(n=dim_x, alpha=0.1, beta=2.0, kappa=0)
 # Initialize UKF using a default measurement function (we will switch based on camera)
 ukf = UnscentedKalmanFilter(dim_x=dim_x, dim_z=dim_z, dt=0.02, fx=fx, hx=hx_floor, points=points)
 # Set an initial state guess (modify as needed)
-ukf.x = np.array([0.8, 0.0, 1.8, 9.0, 0.0, 0.0])
+ukf.x = np.array([0.8, 0.0, 1.8, -9.5, 0.0, 0.0])
 ukf.P = np.eye(dim_x) * 1.0
 ukf.Q = np.eye(dim_x) * 0.5
-ukf.Q[1][1] = 0.05
-ukf.Q[2][2] = 0.05
-ukf.Q[3][3] = 0.05
+ukf.Q[1][1] = 0.02
+ukf.Q[2][2] = 0.02
+ukf.Q[3][3] = 0.02
 
 # ------------------------------------------------------------
 # State Propagation
@@ -262,20 +262,20 @@ def main():
             ukf.update(meas, R=R_meas, hx=hx_side)
         
         ukf.P = (ukf.P + ukf.P.T) / 2 + np.eye(dim_x) * 1e-6
-        
+    startime = time.perf_counter()    
     # After processing all buffered data, make a prediction.
-    target_x = -1.99  # desired x position (in meters)
+    target_x = -2.10  # desired x position (in meters)
     predicted_state, t_target = predict_state_at_target(ukf.x, target_x, kv=0.67, g=9.81)
     if predicted_state is not None:
         print("Time to reach x = {:.2f} m: {:.4f} s".format(target_x, t_target))
         print("Predicted state at x = {:.2f} m:".format(target_x))
         print("x = {:.4f}, y = {:.4f}, z = {:.4f}, vx = {:.4f}, vy = {:.4f}, vz = {:.4f}".format(
-            predicted_state[0], predicted_state[1],
-            predicted_state[2], predicted_state[3],
+            predicted_state[0]*39.37, predicted_state[1]*39.37-3.5,
+            predicted_state[2]*39.37+3, predicted_state[3],
             predicted_state[4], predicted_state[5]))
     else:
         print("Prediction failed.")
-
+    print(startime - time.perf_counter())
 if __name__ == "__main__":
     main()
 
@@ -313,11 +313,9 @@ def main():
                     ukf.update(np.array([cx,cy]),R=R_meas,hx=hx_floor)
                 elif pi_id == 1:
                     ukf.update(np.array([cx,cy]),R=R_meas,hx=hx_side)
-                ukf.P = (ukf.P + ukf.P.T) / 2 + np.eye(dim_x)*1e-6
-            if time.perf_counter() - start > 0.365:
+            if time.perf_counter() - start > 0.265:
                 break
-            print(time.perf_counter() - start2)
-            #time.sleep(0.003)  # small sleep to reduce CPU usage
+            
     
         # target x
         target_x = -1.99
