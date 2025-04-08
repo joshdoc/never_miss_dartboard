@@ -287,16 +287,17 @@ def main():
     try:
         while True:
             result = receive_centroid(sock)
+            start2 = time.perf_counter()
             if first_meas:
                 start = time.perf_counter()
             if result:
+                
                 pi_id, cx, cy, ts = result
-
                 #extract seconds value from timestamp
                 parts = ts.split(":") 
                 ts = float(parts[2])
 
-                # print(f"[{ts}] Pi {pi_id} -> centroid_x = {cx}, centroid_y = {cy}")
+                print(f"[{ts}] Pi {pi_id} -> centroid_x = {cx}, centroid_y = {cy}")
 
                 dt = 0.0
                 prev = 0.0
@@ -307,13 +308,22 @@ def main():
                     dt = ts - prev
                     prev = ts
                 ukf.predict(dt)
+                ukf.P = (ukf.P + ukf.P.T) / 2 + np.eye(dim_x)*1e-6
                 if pi_id == 2:
                     ukf.update(np.array([cx,cy]),R=R_meas,hx=hx_floor)
                 elif pi_id == 1:
                     ukf.update(np.array([cx,cy]),R=R_meas,hx=hx_side)
+<<<<<<< HEAD
             if time.perf_counter() - start > 0.265:
                 break
             
+=======
+                ukf.P = (ukf.P + ukf.P.T) / 2 + np.eye(dim_x)*1e-6
+            if time.perf_counter() - start > 0.365:
+                break
+            print(time.perf_counter() - start2)
+            #time.sleep(0.003)  # small sleep to reduce CPU usage
+>>>>>>> refs/remotes/origin/main
     
         # target x
         target_x = -1.99
