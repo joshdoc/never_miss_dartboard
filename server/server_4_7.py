@@ -90,14 +90,14 @@ def hx_side(state):
     return np.array([u, v])
 
 # Measurement noise covariance
-R_meas = np.array([[9.0, 0],
-                   [0,    4.0]])
+R_meas = np.array([[16.0, 0],
+                   [0,    9.0]])
 
 # ------------------------------------------------------------
 # Dynamics
 # ------------------------------------------------------------
 g = 9.81   # gravitational acceleration
-kv = 0.30   # drag coefficient 
+kv = 0.50   # drag coefficient 
 
 def fx(state, dt):
     """
@@ -128,10 +128,12 @@ ukf = UnscentedKalmanFilter(dim_x=dim_x, dim_z=dim_z, dt=0.02, fx=fx, hx=hx_floo
 ukf.x = np.array([0.8, 0.0, 1.8, -9.5, 0.0, 0.0])
 ukf.P = np.eye(dim_x) * 1.0
 ukf.Q = np.eye(dim_x) * 0.5
-ukf.Q[1][1] = 0.02
-ukf.Q[2][2] = 0.02
-ukf.Q[3][3] = 0.02
-
+ukf.Q[0][0] = 0.025
+ukf.Q[1][1] = 0.05
+ukf.Q[2][2] = 0.025
+ukf.Q[3][3] = 1.0
+ukf.Q[4][4] = 0.1
+ukf.Q[5][5] = 0.5
 # ------------------------------------------------------------
 # State Propagation
 # ------------------------------------------------------------
@@ -227,11 +229,11 @@ def main():
                 if start is None:
                     start = time.perf_counter()
             
-            # If the timer has started, check if we've collected data for at least 0.265 s.
-            if start is not None and time.perf_counter() - start > 0.265:
+            # If the timer has started, check if we've collected data for at least time (s).
+            if start is not None and time.perf_counter() - start > 0.200:
                 break
             
-            time.sleep(0.003)  # small sleep to reduce CPU usage
+            time.sleep(0.001)  # small sleep to reduce CPU usage
     
     except KeyboardInterrupt:
         print("Main loop terminated.")
