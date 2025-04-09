@@ -53,7 +53,7 @@ K_right = intrinsics_right["camera_matrix"]
 dist_right = intrinsics_right["dist_coeffs"]
 
 # Load extrinsics 
-extrinsics = np.load('stereo_extrinsics.npz')
+extrinsics = np.load('stereo.npz')
 R_side = extrinsics['R']      # rotation
 T_side = extrinsics['T']      # translation
 
