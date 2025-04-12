@@ -1,3 +1,23 @@
+/**
+ * This program captures grayscale video frames from a Raspberry Pi camera using a GStreamer pipeline,
+ * detects the largest bright object (based on contour area), computes its centroid, and sends the
+ * (x, y) coordinates over UDP to a specified destination IP address and port.
+ *
+ * It is optimized for real-time performance using real-time scheduling and memory locking.
+ * This is intended for multi-Raspberry Pi systems communicating with a centralized laptop or server.
+ *
+ * USAGE:
+ *   ./pi_centroid_tracker [threshold (0-255)] [PI_ID (1-2)]
+ *   - threshold: Pixel intensity threshold to filter bright objects (default: 32)
+ *   - PI_ID: Unique identifier for the Raspberry Pi (used in the UDP packet, default: 1)
+ *
+ * EXAMPLE:
+ *   ./pi_centroid_tracker 40 2
+ *
+ * Authors: Jacob Blosser, Jacob Dell, Joshua Doctor, William Hurley, Jacob Root 
+ * Date: 04-12-2025
+ */
+
 #include <opencv2/opencv.hpp>
 #include <iostream>
 #include <fcntl.h>
