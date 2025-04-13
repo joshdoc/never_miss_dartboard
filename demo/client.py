@@ -17,7 +17,7 @@ def generate_frames():
         print("Failed to open camera stream.")
         return
 
-    scale_factor = 0.4
+    scale_factor = 0.7
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
 
     while True:
@@ -60,9 +60,7 @@ def generate_frames():
                 if len(centroid_history) > 15:
                     centroid_history = centroid_history[-15:]
 
-        # Resize the binary image for display (e.g., 1280x720).
-        binary_display = cv2.resize(binary, (1280, 720), interpolation=cv2.INTER_LINEAR)
-        ret, buffer = cv2.imencode('.jpg', binary_display)
+        ret, buffer = cv2.imencode('.jpg', binary)
         if not ret:
             continue
 
