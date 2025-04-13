@@ -67,7 +67,6 @@ def generate_frames():
         frame_bytes = buffer.tobytes()
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-
 HTML_TEMPLATE = """
 <!doctype html>
 <html lang="en">
@@ -108,9 +107,8 @@ HTML_TEMPLATE = """
       font-size: 1em;
       color: #00274C;
     }
-    /* The border only wraps the video feed image */
     .video-feed-box {
-      border: 2px solid #00274C;
+      border: 2px solid #FFCB05;
     }
     .video-feed-box img {
       display: block;
@@ -130,7 +128,7 @@ HTML_TEMPLATE = """
       width: 300px;
       background-color: #f0f0f0;
       padding: 10px;
-      border: 2px solid #00274C;
+      border: 2px solid #FFCB05;
       text-align: left;
       font-size: 0.9em;
       min-height: 100px;
@@ -172,6 +170,7 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
 
 
 @app.route('/')
