@@ -4,6 +4,7 @@ import numpy as np
 import threading
 
 app = Flask(__name__)
+app.jinja_env.cache = {}
 
 # Global list to hold the last 15 valid centroids.
 centroid_history = []
