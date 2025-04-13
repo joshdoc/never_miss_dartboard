@@ -68,9 +68,6 @@ def generate_frames():
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
-# Updated HTML template with two columns.
-# The left column shows the video feed with its header/subtext (only the image has a border),
-# and the right column shows a header "Centroid Feed" outside the border box with the centroid list inside a bordered box.
 HTML_TEMPLATE = """
 <!doctype html>
 <html lang="en">
@@ -82,9 +79,9 @@ HTML_TEMPLATE = """
       height: 100%;
       margin: 0;
       padding: 0;
-      background-color: #222;
+      background-color: #fff;
       font-family: Arial, sans-serif;
-      color: #eee;
+      color: #00274C;
     }
     .main-container {
       display: flex;
@@ -104,16 +101,16 @@ HTML_TEMPLATE = """
     .video-header h1 {
       margin: 0;
       font-size: 2.5em;
+      color: #00274C;
     }
     .video-header p {
       margin: 5px 0 15px 0;
       font-size: 1em;
-      color: #ccc;
+      color: #00274C;
     }
     /* The border only wraps the video feed image */
     .video-feed-box {
-      border: 2px solid #eee;
-      box-shadow: 0 0 10px rgba(255,255,255,0.5);
+      border: 2px solid #00274C;
     }
     .video-feed-box img {
       display: block;
@@ -127,17 +124,18 @@ HTML_TEMPLATE = """
     .centroid-header {
       margin-bottom: 10px;
       font-size: 2em;
+      color: #00274C;
     }
     .centroid-box {
       width: 300px;
-      background-color: #333;
+      background-color: #f0f0f0;
       padding: 10px;
-      border: 2px solid #eee;
-      box-shadow: 0 0 10px rgba(255,255,255,0.5);
+      border: 2px solid #00274C;
       text-align: left;
       font-size: 0.9em;
       min-height: 100px;
       overflow-y: auto;
+      color: #00274C;
     }
     .centroid-entry {
       margin: 2px 0;
@@ -161,12 +159,10 @@ HTML_TEMPLATE = """
     </div>
   </div>
   <script>
-    // Poll the /centroid endpoint every 500ms to update the centroid feed.
     function updateCentroid() {
       fetch('/centroid')
         .then(response => response.text())
         .then(text => {
-          // Update the centroid feed only if valid entries are available.
           document.getElementById('centroidBox').innerHTML = text;
         })
         .catch(err => console.error(err));
@@ -176,6 +172,7 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
 
 @app.route('/')
 def index():
