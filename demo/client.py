@@ -5,13 +5,13 @@ import threading
 
 app = Flask(__name__)
 
-# Global variable to hold the latest centroid text
-latest_centroid_text = "Centroid: N/A"
-# A lock to ensure thread-safe updates to latest_centroid_text
-centroid_lock = threading.Lock()
+# Global list to hold the last 15 valid centroids.
+centroid_history = []
+# A lock to ensure thread-safe access to centroid_history.
+history_lock = threading.Lock()
 
 def generate_frames():
-    global latest_centroid_text
+    global centroid_history
     cap = cv2.VideoCapture("libcamerasrc ! video/x-raw,width=1280,height=720,format=NV12,framerate=70/1 ! videoconvert ! video/x-raw,format=GRAY8 ! appsink drop=1", cv2.CAP_GSTREAMER)
     if not cap.isOpened():
         print("Failed to open camera stream.")
@@ -25,17 +25,17 @@ def generate_frames():
         if not ret:
             break
 
-        # Preprocess the frame: resize, blur, morphological operations
+        # Preprocess: resize, blur, morphological operations.
         frame_resized = cv2.resize(frame, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_NEAREST)
         blurred = cv2.GaussianBlur(frame_resized, (3, 3), 0)
         eroded = cv2.erode(blurred, kernel)
         dilated = cv2.dilate(eroded, kernel)
         top_hat = cv2.subtract(blurred, dilated)
 
-        # Apply threshold to get binary image
+        # Apply threshold to obtain binary image.
         _, binary = cv2.threshold(top_hat, 50, 255, cv2.THRESH_BINARY)
 
-        # Centroid detection (similar to your C++ snippet)
+        # --- Centroid Detection ---
         contours, _ = cv2.findContours(binary.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         max_area = 0
         best_moments = {}
@@ -49,12 +49,18 @@ def generate_frames():
             cx = int(best_moments["m10"] / best_moments["m00"] / scale_factor)
             cy = int(best_moments["m01"] / best_moments["m00"] / scale_factor)
             centroid = (cx, cy)
+        else:
+            centroid = (-1, -1)
 
-        # Update the global centroid text (thread-safe)
-        with centroid_lock:
-            latest_centroid_text = f"Centroid: {centroid}"
+        # Update the global centroid_history only if a valid centroid is detected.
+        if centroid != (-1, -1):
+            with history_lock:
+                centroid_history.append(centroid)
+                # Keep only the last 15 centroids.
+                if len(centroid_history) > 15:
+                    centroid_history = centroid_history[-15:]
 
-        # Resize the binary image for display (e.g. 1280x720)
+        # Resize the binary image for display (e.g., 1280x720).
         binary_display = cv2.resize(binary, (1280, 720), interpolation=cv2.INTER_LINEAR)
         ret, buffer = cv2.imencode('.jpg', binary_display)
         if not ret:
@@ -64,8 +70,9 @@ def generate_frames():
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
-# HTML template with a two-column layout.
-# The left section shows the header texts and the video feed with a border only around the feed.
+# Updated HTML template with two columns.
+# The left column shows the video feed with its header/subtext (only the image has a border),
+# and the right column shows a header "Centroid Feed" outside the border box with the centroid list inside a bordered box.
 HTML_TEMPLATE = """
 <!doctype html>
 <html lang="en">
@@ -94,6 +101,7 @@ HTML_TEMPLATE = """
     }
     .video-header {
       text-align: center;
+      margin-bottom: 10px;
     }
     .video-header h1 {
       margin: 0;
@@ -115,22 +123,26 @@ HTML_TEMPLATE = """
       height: auto;
     }
     /* Right column: Centroid display */
+    .centroid-container {
+      text-align: center;
+    }
+    .centroid-header {
+      margin-bottom: 10px;
+      font-size: 2em;
+    }
     .centroid-box {
       width: 300px;
       background-color: #333;
-      padding: 20px;
+      padding: 10px;
       border: 2px solid #eee;
       box-shadow: 0 0 10px rgba(255,255,255,0.5);
       text-align: left;
+      font-size: 0.9em;
+      min-height: 100px;
+      overflow-y: auto;
     }
-    .centroid-box h2 {
-      margin-top: 0;
-      text-align: center;
-    }
-    #centroidText {
-      font-size: 1.5em;
-      margin-top: 20px;
-      word-wrap: break-word;
+    .centroid-entry {
+      margin: 2px 0;
     }
   </style>
 </head>
@@ -145,22 +157,23 @@ HTML_TEMPLATE = """
         <img src="/video_feed" alt="Binary Stream">
       </div>
     </div>
-    <div class="centroid-box">
-      <h2>Centroid Feed</h2>
-      <div id="centroidText">Loading...</div>
+    <div class="centroid-container">
+      <div class="centroid-header">Centroid Feed</div>
+      <div class="centroid-box" id="centroidBox">Loading...</div>
     </div>
   </div>
   <script>
-    // Poll the /centroid endpoint every 500ms to update the centroid text.
+    // Poll the /centroid endpoint every 500ms to update the centroid feed.
     function updateCentroid() {
       fetch('/centroid')
         .then(response => response.text())
         .then(text => {
-          document.getElementById('centroidText').innerText = text;
+          // Update the centroid feed only if valid entries are available.
+          document.getElementById('centroidBox').innerHTML = text;
         })
         .catch(err => console.error(err));
     }
-    setInterval(updateCentroid, 500);
+    setInterval(updateCentroid, 100);
   </script>
 </body>
 </html>
@@ -176,10 +189,12 @@ def video_feed():
 
 @app.route('/centroid')
 def centroid_feed():
-    with centroid_lock:
-        text = latest_centroid_text
-    return text
+    with history_lock:
+        # Only display valid centroids.
+        valid_entries = [f"<div class='centroid-entry'>{c}</div>" for c in centroid_history]
+        # If there are no valid detections, return an empty string.
+        result = "".join(valid_entries) if valid_entries else ""
+    return result
 
 if __name__ == '__main__':
-    # Use threaded=True to handle multiple clients concurrently.
     app.run(host='0.0.0.0', port=8080, debug=False, threaded=True)
