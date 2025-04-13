@@ -5,7 +5,6 @@ app = Flask(__name__)
 
 def generate_frames():
     cap = cv2.VideoCapture("libcamerasrc ! video/x-raw,width=1280,height=720,format=NV12,framerate=70/1 ! videoconvert ! video/x-raw,format=GRAY8 ! appsink drop=1", cv2.CAP_GSTREAMER)
-
     if not cap.isOpened():
         print("Failed to open camera stream.")
         return
@@ -18,7 +17,6 @@ def generate_frames():
         if not ret:
             break
 
-        # Resize and pre-process the frame
         frame = cv2.resize(frame, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_NEAREST)
         frame = cv2.GaussianBlur(frame, (3, 3), 0)
 
@@ -26,9 +24,7 @@ def generate_frames():
         dilated = cv2.dilate(eroded, kernel)
         top_hat = cv2.subtract(frame, dilated)
 
-        # Apply threshold for binary image
         _, binary = cv2.threshold(top_hat, 50, 255, cv2.THRESH_BINARY)
-
         ret, buffer = cv2.imencode('.jpg', binary)
         if not ret:
             continue
@@ -37,7 +33,6 @@ def generate_frames():
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
-# HTML template to center the video stream on the webpage
 HTML_TEMPLATE = """
 <!doctype html>
 <html lang="en">
@@ -49,10 +44,16 @@ HTML_TEMPLATE = """
       background-color: #222;
       color: #eee;
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
       height: 100vh;
       margin: 0;
+      font-family: Arial, sans-serif;
+    }
+    h1 {
+      margin-bottom: 20px;
+      font-size: 2em;
     }
     img {
       border: 2px solid #eee;
@@ -61,6 +62,7 @@ HTML_TEMPLATE = """
   </style>
 </head>
 <body>
+  <h1>Binary Video Feed</h1>
   <img src="/video_feed" alt="Binary Stream">
 </body>
 </html>
@@ -68,14 +70,11 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index():
-    # Render the main HTML page that centers the video stream
     return render_template_string(HTML_TEMPLATE)
 
 @app.route('/video_feed')
 def video_feed():
-    # Return the MJPEG stream
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    # Run the Flask server on all network interfaces at port 8080
     app.run(host='0.0.0.0', port=8080, debug=False, threaded=True)
