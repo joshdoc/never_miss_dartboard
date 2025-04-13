@@ -17,6 +17,7 @@ def generate_frames():
         if not ret:
             break
 
+        # Pre-process frame: resize, blur, apply morphological operations and threshold
         frame = cv2.resize(frame, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_NEAREST)
         frame = cv2.GaussianBlur(frame, (3, 3), 0)
 
@@ -33,6 +34,7 @@ def generate_frames():
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
+# Updated HTML template with a container for explicit layout
 HTML_TEMPLATE = """
 <!doctype html>
 <html lang="en">
@@ -40,20 +42,25 @@ HTML_TEMPLATE = """
   <meta charset="utf-8">
   <title>Binary Video Stream</title>
   <style>
-    body {
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    .container {
       background-color: #222;
       color: #eee;
+      height: 100%;
       display: flex;
       flex-direction: column;
-      align-items: center;
       justify-content: center;
-      height: 100vh;
-      margin: 0;
+      align-items: center;
       font-family: Arial, sans-serif;
+      text-align: center;
     }
     h1 {
       margin-bottom: 20px;
-      font-size: 2em;
+      font-size: 2.5em;
     }
     img {
       border: 2px solid #eee;
@@ -62,8 +69,10 @@ HTML_TEMPLATE = """
   </style>
 </head>
 <body>
-  <h1>Binary Video Feed</h1>
-  <img src="/video_feed" alt="Binary Stream">
+  <div class="container">
+    <h1>Binary Video Feed</h1>
+    <img src="/video_feed" alt="Binary Stream">
+  </div>
 </body>
 </html>
 """
