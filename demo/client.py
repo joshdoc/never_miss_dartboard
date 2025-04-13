@@ -100,21 +100,27 @@ HTML_TEMPLATE = """
       align-items: center;
     }
 
+    .video-header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+
     .video-header h1 {
-      font-size: 2.5em;
+      font-size: 3em;
       font-weight: bold;
       margin: 0;
       color: #00274C;
     }
 
     .video-header p {
-      margin: 8px 0 20px 0;
+      margin: 10px 0 0 0;
       font-size: 1em;
       color: #00274C;
     }
 
     .video-feed-box {
       border: 3px solid #FFCB05;
+      border-radius: 8px;
       box-shadow: 0 0 10px rgba(0, 0, 0, 0.15);
     }
 
@@ -122,6 +128,7 @@ HTML_TEMPLATE = """
       display: block;
       max-width: 100%;
       height: auto;
+      border-radius: 8px;
     }
 
     /* --- Centroid Section --- */
@@ -132,7 +139,7 @@ HTML_TEMPLATE = """
     }
 
     .centroid-header {
-      font-size: 2em;
+      font-size: 3em;
       font-weight: bold;
       margin-bottom: 10px;
       color: #00274C;
@@ -162,7 +169,7 @@ HTML_TEMPLATE = """
     <div class="video-container">
       <div class="video-header">
         <h1>Binary Video Feed</h1>
-        <p>This is a Python script for demo purposes.</p>
+        <p>Disclaimer: This is a Python script for demo purposes.</p>
       </div>
       <div class="video-feed-box">
         <img src="/video_feed" alt="Binary Stream">
@@ -188,6 +195,7 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
 
 @app.route('/')
 def index():
