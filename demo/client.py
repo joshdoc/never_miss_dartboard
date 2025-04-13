@@ -7,7 +7,6 @@ app = Flask(__name__)
 
 # Global variable to hold the latest centroid text
 latest_centroid_text = "Centroid: N/A"
-
 # A lock to ensure thread-safe updates to latest_centroid_text
 centroid_lock = threading.Lock()
 
@@ -33,10 +32,10 @@ def generate_frames():
         dilated = cv2.dilate(eroded, kernel)
         top_hat = cv2.subtract(blurred, dilated)
 
-        # Apply threshold to get a binary image
+        # Apply threshold to get binary image
         _, binary = cv2.threshold(top_hat, 50, 255, cv2.THRESH_BINARY)
 
-        # --- CENTROID DETECTION ---
+        # Centroid detection (similar to your C++ snippet)
         contours, _ = cv2.findContours(binary.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         max_area = 0
         best_moments = {}
@@ -51,13 +50,12 @@ def generate_frames():
             cy = int(best_moments["m01"] / best_moments["m00"] / scale_factor)
             centroid = (cx, cy)
 
-        # Update the global centroid text in a thread-safe way
+        # Update the global centroid text (thread-safe)
         with centroid_lock:
             latest_centroid_text = f"Centroid: {centroid}"
 
-        # For display, you might want to resize the binary image to a fixed display resolution.
+        # Resize the binary image for display (e.g. 1280x720)
         binary_display = cv2.resize(binary, (1280, 720), interpolation=cv2.INTER_LINEAR)
-
         ret, buffer = cv2.imencode('.jpg', binary_display)
         if not ret:
             continue
@@ -66,7 +64,8 @@ def generate_frames():
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
-# HTML template with a two-column layout: video feed on the left and text feed on the right.
+# HTML template with a two-column layout.
+# The left section shows the header texts and the video feed with a border only around the feed.
 HTML_TEMPLATE = """
 <!doctype html>
 <html lang="en">
@@ -87,38 +86,68 @@ HTML_TEMPLATE = """
       height: 100%;
       justify-content: center;
       align-items: center;
-    }
-    .box {
-      background-color: #333;
       padding: 20px;
-      margin: 10px;
+    }
+    /* Left column: Video feed with header texts */
+    .video-container {
+      margin-right: 20px;
+    }
+    .video-header {
+      text-align: center;
+    }
+    .video-header h1 {
+      margin: 0;
+      font-size: 2.5em;
+    }
+    .video-header p {
+      margin: 5px 0 15px 0;
+      font-size: 1em;
+      color: #ccc;
+    }
+    /* The border only wraps the video feed image */
+    .video-feed-box {
       border: 2px solid #eee;
       box-shadow: 0 0 10px rgba(255,255,255,0.5);
     }
-    .video-box img {
+    .video-feed-box img {
       display: block;
       max-width: 100%;
       height: auto;
     }
+    /* Right column: Centroid display */
     .centroid-box {
       width: 300px;
-      word-wrap: break-word;
+      background-color: #333;
+      padding: 20px;
+      border: 2px solid #eee;
+      box-shadow: 0 0 10px rgba(255,255,255,0.5);
       text-align: left;
     }
-    h1, h2 {
+    .centroid-box h2 {
+      margin-top: 0;
       text-align: center;
+    }
+    #centroidText {
+      font-size: 1.5em;
+      margin-top: 20px;
+      word-wrap: break-word;
     }
   </style>
 </head>
 <body>
   <div class="main-container">
-    <div class="box video-box">
-      <h1>Binary Video Feed</h1>
-      <img src="/video_feed" alt="Binary Stream">
+    <div class="video-container">
+      <div class="video-header">
+        <h1>Binary Video Feed</h1>
+        <p>This is a Python script for demo purposes.</p>
+      </div>
+      <div class="video-feed-box">
+        <img src="/video_feed" alt="Binary Stream">
+      </div>
     </div>
-    <div class="box centroid-box">
+    <div class="centroid-box">
       <h2>Centroid Feed</h2>
-      <div id="centroidText" style="font-size:1.5em; margin-top:20px;">Loading...</div>
+      <div id="centroidText">Loading...</div>
     </div>
   </div>
   <script>
@@ -152,6 +181,5 @@ def centroid_feed():
     return text
 
 if __name__ == '__main__':
-    # Run Flask with threading enabled so multiple requests can be handled.
+    # Use threaded=True to handle multiple clients concurrently.
     app.run(host='0.0.0.0', port=8080, debug=False, threaded=True)
-
