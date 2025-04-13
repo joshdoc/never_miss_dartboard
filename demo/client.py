@@ -79,65 +79,81 @@ HTML_TEMPLATE = """
       height: 100%;
       margin: 0;
       padding: 0;
-      background-color: #fff;
-      font-family: Arial, sans-serif;
-      color: #00274C;
+      background-color: #FFFDE7; /* Soft maize background */
+      font-family: 'Arial', sans-serif;
+      color: #00274C; /* Michigan blue */
     }
+
     .main-container {
       display: flex;
-      height: 100%;
+      flex-direction: row;
       justify-content: center;
       align-items: center;
-      padding: 20px;
+      height: 100vh;
+      gap: 40px;
     }
-    /* Left column: Video feed with header texts */
+
+    /* --- Video Section --- */
     .video-container {
-      margin-right: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
-    .video-header {
-      text-align: center;
-      margin-bottom: 10px;
-    }
+
     .video-header h1 {
-      margin: 0;
       font-size: 2.5em;
+      font-weight: bold;
+      margin: 0;
       color: #00274C;
     }
+
     .video-header p {
-      margin: 5px 0 15px 0;
+      margin: 8px 0 20px 0;
       font-size: 1em;
       color: #00274C;
     }
+
     .video-feed-box {
-      border: 2px solid #FFCB05;
+      border: 3px solid #FFCB05;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.15);
     }
+
     .video-feed-box img {
       display: block;
       max-width: 100%;
       height: auto;
     }
-    /* Right column: Centroid display */
+
+    /* --- Centroid Section --- */
     .centroid-container {
-      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
+
     .centroid-header {
-      margin-bottom: 10px;
       font-size: 2em;
+      font-weight: bold;
+      margin-bottom: 10px;
       color: #00274C;
     }
+
     .centroid-box {
-      width: 300px;
-      background-color: #f0f0f0;
-      padding: 10px;
-      border: 2px solid #FFCB05;
-      text-align: left;
-      font-size: 0.9em;
-      min-height: 100px;
+      width: 320px;
+      background-color: #E6EEF5;
+      padding: 12px;
+      border: 3px solid #FFCB05;
+      border-radius: 8px;
+      font-size: 1em;
+      min-height: 120px;
+      max-height: 400px;
       overflow-y: auto;
       color: #00274C;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.15);
     }
+
     .centroid-entry {
-      margin: 2px 0;
+      margin: 4px 0;
     }
   </style>
 </head>
@@ -157,6 +173,7 @@ HTML_TEMPLATE = """
       <div class="centroid-box" id="centroidBox">Loading...</div>
     </div>
   </div>
+
   <script>
     function updateCentroid() {
       fetch('/centroid')
@@ -171,8 +188,6 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
-
-
 
 @app.route('/')
 def index():
