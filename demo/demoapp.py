@@ -1,3 +1,18 @@
+/**
+ * Flask application to stream binary video frames from a Raspberry Pi camera and display centroid history, used during Expo demonstration.
+ *
+ * This web app captures grayscale frames via a GStreamer pipeline, processes them to detect the largest
+ * bright object's centroid, and serves both the binary video feed and centroid coordinates over HTTP on a local network.
+ *
+ * The web interface shows the binary video and a scrolling list of the last 15 centroids.
+ *
+ * USAGE:
+ *   python demoapp.py
+ *
+ * Authors: Jacob Blosser, Jacob Dell, Joshua Doctor, William Hurley, Jacob Root
+ * Date: 04-13-2025
+ */
+
 from flask import Flask, Response, render_template_string
 import cv2
 import numpy as np
@@ -6,14 +21,16 @@ import threading
 app = Flask(__name__)
 app.jinja_env.cache = {}
 
-# Global list to hold the last 15 valid centroids.
 centroid_history = []
-# A lock to ensure thread-safe access to centroid_history.
 history_lock = threading.Lock()
 
 def generate_frames():
     global centroid_history
-    cap = cv2.VideoCapture("libcamerasrc ! video/x-raw,width=1280,height=720,format=NV12,framerate=70/1 ! videoconvert ! video/x-raw,format=GRAY8 ! appsink drop=1", cv2.CAP_GSTREAMER)
+    cap = cv2.VideoCapture(
+        "libcamerasrc ! video/x-raw,width=1280,height=720,format=NV12,framerate=70/1 ! "
+        "videoconvert ! video/x-raw,format=GRAY8 ! appsink drop=1",
+        cv2.CAP_GSTREAMER
+    )
     if not cap.isOpened():
         print("Failed to open camera stream.")
         return
@@ -26,18 +43,19 @@ def generate_frames():
         if not ret:
             break
 
-        # Preprocess: resize, blur, morphological operations.
-        frame_resized = cv2.resize(frame, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_NEAREST)
+        frame_resized = cv2.resize(
+            frame, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_NEAREST
+        )
         blurred = cv2.GaussianBlur(frame_resized, (3, 3), 0)
         eroded = cv2.erode(blurred, kernel)
         dilated = cv2.dilate(eroded, kernel)
         top_hat = cv2.subtract(blurred, dilated)
 
-        # Apply threshold to obtain binary image.
         _, binary = cv2.threshold(top_hat, 50, 255, cv2.THRESH_BINARY)
 
-        # --- Centroid Detection ---
-        contours, _ = cv2.findContours(binary.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(
+            binary.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
         max_area = 0
         best_moments = {}
         centroid = (-1, -1)
@@ -53,11 +71,9 @@ def generate_frames():
         else:
             centroid = (-1, -1)
 
-        # Update the global centroid_history only if a valid centroid is detected.
         if centroid != (-1, -1):
             with history_lock:
                 centroid_history.append(centroid)
-                # Keep only the last 15 centroids.
                 if len(centroid_history) > 15:
                     centroid_history = centroid_history[-15:]
 
@@ -66,8 +82,11 @@ def generate_frames():
             continue
 
         frame_bytes = buffer.tobytes()
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        yield (
+            b'--frame\r\n'
+            b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
+        )
+
 HTML_TEMPLATE = """
 <!doctype html>
 <html lang="en">
@@ -79,9 +98,9 @@ HTML_TEMPLATE = """
       height: 100%;
       margin: 0;
       padding: 0;
-      background-color: #FFFDE7; /* Soft maize background */
+      background-color: #FFFDE7;
       font-family: 'Arial', sans-serif;
-      color: #00274C; /* Michigan blue */
+      color: #00274C;
     }
 
     .main-container {
@@ -93,7 +112,6 @@ HTML_TEMPLATE = """
       gap: 40px;
     }
 
-    /* --- Video Section --- */
     .video-container {
       display: flex;
       flex-direction: column;
@@ -131,7 +149,6 @@ HTML_TEMPLATE = """
       border-radius: 8px;
     }
 
-    /* --- Centroid Section --- */
     .centroid-container {
       display: flex;
       flex-direction: column;
@@ -196,8 +213,6 @@ HTML_TEMPLATE = """
 </html>
 """
 
-
-
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
@@ -209,9 +224,7 @@ def video_feed():
 @app.route('/centroid')
 def centroid_feed():
     with history_lock:
-        # Only display valid centroids.
         valid_entries = [f"<div class='centroid-entry'>{c}</div>" for c in centroid_history]
-        # If there are no valid detections, return an empty string.
         result = "".join(valid_entries) if valid_entries else ""
     return result
 
